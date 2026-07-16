@@ -1,0 +1,96 @@
+---
+# tasks file for psm_clean
+
+- name: Find all inf and log files in hardening folder
+  ansible.windows.win_find:
+    paths: "{{ psm_installation_path }}\\PSM\\Hardening"
+    patterns: ['*.inf', '*.log']
+  register: files_to_delete
+
+- name: Delete all inf and log files in the hardening folder
+  ansible.windows.win_file:
+    path: "{{ item.path }}"
+    state: absent
+  with_items: "{{ files_to_delete.files }}"
+
+- name: Find all Relevant Files in the Windows Temp Folder
+  ansible.windows.win_find:
+    paths: C:\Windows\Temp
+    patterns: ['PSM*.*', 'InstallationAutomation*.*']
+  register: files_to_delete
+
+- name: Delete all Relevant Files in the Windows Temp Folder
+  ansible.windows.win_file:
+    path: "{{ item.path }}"
+    state: absent
+  with_items: "{{ files_to_delete.files }}"
+
+- name: Clean cred files
+  ansible.windows.win_file:
+    path: "{{ item }}"
+    state: absent
+  with_items:
+    - "{{ psm_installation_path }}\\PSM\\Vault\\psmgw.ini"
+    - "{{ psm_installation_path }}\\PSM\\Vault\\psmapp.ini"
+
+- name: Keep installation automation folder
+  ansible.windows.win_copy:
+    src: "{{ psm_installationautomation_folder }}"
+    dest: "{{ psm_base_bin_drive }}\\Cyberark\\PSM"
+    remote_src: true
+
+- name: Keep Registration Tool folder
+  ansible.windows.win_copy:
+    src: "{{ psm_registrationtool_location }}"
+    dest: "{{ psm_base_bin_drive }}\\Cyberark\\PSM"
+    remote_src: true
+
+- name: Delete the deployment folder
+  ansible.windows.win_file:
+    path: "{{ psm_extract_folder }}"
+    state: absent
+
+- name: Validate folder Deletion
+  ansible.windows.win_stat:
+    path: "{{ psm_extract_folder }}"
+  register: folder_data
+
+- name: End play if Deployment folder was not deleted
+  ansible.builtin.fail:
+    msg: "Error on folder deletion, stop play..."
+  when: folder_data.stat.exists
+
+- name: Copy Reset RDS Grace Period Powershell to the Machine
+  ansible.windows.win_copy:
+    src: "files/Reset-TSGracePeriod.ps1"
+    dest: "%TEMP%\\"
+
+- name: Reset RDS Grace Period
+  ansible.windows.win_command: powershell.exe -File Reset-TSGracePeriod.ps1
+  args:
+    chdir: "%TEMP%\\"
+
+- name: Create Deployment Folders
+  ansible.windows.win_file:
+    path: "{{ item }}"
+    state: directory
+  with_items:
+    - "C:\\CyberArk"
+    - "C:\\CyberArk\\Deployment"
+    - "C:\\CyberArk\\Deployment\\Logs"
+
+- name: Copy PS1 scripts - AWS
+  ansible.windows.win_copy:
+    src: "files/aws/{{ item }}"
+    dest: C:\CyberArk\Deployment\
+  with_items:
+    - PSMRegistration.ps1
+    - PSMConfiguration.ps1
+    - CloudWatch.ps1
+    - Common.ps1
+  when: platform == 'aws'
+
+- name: Copy CloudWatch Json
+  ansible.windows.win_copy:
+    src: "files/aws/AWS.EC2.Windows.CloudWatch.json"
+    dest: "C:\\Program Files\\Amazon\\SSM\\Plugins\\awsCloudWatch\\"

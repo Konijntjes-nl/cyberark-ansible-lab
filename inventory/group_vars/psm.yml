@@ -1,0 +1,6 @@
+---
+# Change this to the actual path on your Linux Ansible server!
+psm_zip_file_path: "/tmp/cyberark/Privileged Session Manager.zip" # <-- UPDATE THIS
+psm_installation_drive: "C:"
+psm_out_of_domain: false
+platform: "onprem"

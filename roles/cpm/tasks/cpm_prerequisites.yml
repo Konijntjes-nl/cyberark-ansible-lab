@@ -1,0 +1,53 @@
+---
+# tasks file for cpm prerequisities
+
+- name: Pre Install Block
+  block:
+
+    - name: Run CPM prerequisites
+      win_shell: |
+        $ErrorActionPreference = "SilentlyContinue"
+        $Action = .\CPM_PreInstallation.ps1
+        $Action | Out-File -FilePath "{{ cpm_prerequisites_log }}"
+        $Result = Get-Content "{{ cpm_prerequisites_log }}" -Raw | ConvertFrom-Json
+        if ($Result.isSucceeded -ne 0) {
+            exit 1
+        } else {
+            exit 0
+        }
+      args:
+        chdir: "{{ cpm_installationautomation_folder }}"
+
+    - name: Get log path for prerequisites
+      win_shell: |
+        $Result = Get-Content "{{ cpm_prerequisites_log }}"
+        Write-Output $Result
+      register: log_result
+
+    - name: Fetch prerequisites log from path
+      fetch:
+        src: '{{ item.logPath }}'
+        dest: '{{ lookup("config", "DEFAULT_LOG_PATH") | dirname }}/cpm/{{ inventory_hostname }}_prerequisites.log'
+        flat: yes
+      with_items:
+        - "{{ log_result.stdout | from_json }}"
+
+  rescue:
+
+    - name: Rescue - Get log path for prerequisites
+      win_shell: |
+        $Result = Get-Content "{{ cpm_prerequisites_log }}"
+        Write-Output $Result
+      register: log_result
+
+    - name: Rescue - Fetch prerequisites log from path
+      fetch:
+        src: '{{ item.logPath }}'
+        dest: '{{ lookup("config", "DEFAULT_LOG_PATH") | dirname }}/cpm/{{ inventory_hostname }}_prerequisites.log'
+        flat: yes
+      with_items:
+        - "{{ log_result.stdout | from_json }}"
+
+    - name: Rescue - Fail prerequisites stage
+      fail:
+        msg: 'ERROR: Pre Prerequisites failed. For more info check {{ lookup("config", "DEFAULT_LOG_PATH") | dirname }}/cpm/{{ inventory_hostname }}_prerequisites.log'

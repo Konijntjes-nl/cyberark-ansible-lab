@@ -1,0 +1,17 @@
+# --- Connection Settings ---
+# CHANGE: Use the user created by your Cloud-Init script
+# Inside inventory/group_vars/windows.yml
+ansible_user: "Administrator"
+ansible_password: "{{ vault_ansible_password }}" # This points to YourComplexPassword123! in all.yml
+# Standard WinRM settings
+ansible_connection: winrm
+ansible_winrm_server_cert_validation: ignore
+ansible_port: 5985
+ansible_winrm_transport: ntlm
+
+# --- Provisioning ---
+# KEEP THIS: Cloud-Init still needs to reset the built-in Admin as a backup
+ci_user: "Administrator"
+
+# --- Network ---
+ansible_host: "{{ ip }}"

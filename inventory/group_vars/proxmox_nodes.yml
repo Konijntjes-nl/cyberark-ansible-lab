@@ -1,0 +1,4 @@
+ansible_user: "root"
+# Dynamically picks the password based on hostname from all.yml
+ansible_password: "{{ lookup('vars', inventory_hostname + '_root_password') }}"
+ansible_ssh_common_args: '-o StrictHostKeyChecking=no'

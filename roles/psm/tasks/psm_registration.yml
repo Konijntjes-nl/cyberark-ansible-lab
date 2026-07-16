@@ -1,0 +1,120 @@
+---
+# tasks file for psm registration
+
+- name: Registration Block
+  block:
+
+    - name: Update PSM registration configuration file
+      ansible.windows.win_shell: |
+        try
+        {
+            $filePath = "{{ psm_registrationtool_folder }}\\RegistrationConfig.xml"
+            $xml = [xml](Get-Content $filePath)
+            $step1 = $xml.SelectSingleNode("//Parameter[@Name = 'vaultip']")
+            $step1.Value = "{{ vault_ip }}"
+            $step2 = $xml.SelectSingleNode("//Parameter[@Name = 'vaultport']")
+            $step2.Value = "{{ vault_port }}"
+            $step3 = $xml.SelectSingleNode("//Parameter[@Name = 'vaultusername']")
+            $step3.Value = "{{ vault_username }}"
+            $step4 = $xml.SelectSingleNode("//Parameter[@Name = 'accepteula']")
+            $step4.Value = "yes"
+            $xml.Save($filePath)
+            exit 0
+        }
+        catch
+        {
+            Write-Output "Error occured While updating registration configuration file"
+            exit 1
+        }
+      when: dr_vault_ip is not defined
+
+    - name: Update PSM registration configuration file
+      ansible.windows.win_shell: |
+        try
+        {
+            $filePath = "{{ psm_registrationtool_folder }}\\RegistrationConfig.xml"
+            $xml = [xml](Get-Content $filePath)
+            $step1 = $xml.SelectSingleNode("//Parameter[@Name = 'vaultip']")
+            $step1.Value = "{{ vault_ip }},{{ dr_vault_ip }}"
+            $step2 = $xml.SelectSingleNode("//Parameter[@Name = 'vaultport']")
+            $step2.Value = "{{ vault_port }}"
+            $step3 = $xml.SelectSingleNode("//Parameter[@Name = 'vaultusername']")
+            $step3.Value = "{{ vault_username }}"
+            $step4 = $xml.SelectSingleNode("//Parameter[@Name = 'accepteula']")
+            $step4.Value = "yes"
+            $xml.Save($filePath)
+            exit 0
+        }
+        catch
+        {
+            Write-Output "Error occured While updating registration configuration file"
+            exit 1
+        }
+      when: dr_vault_ip is defined
+
+    - name: Run PSM registration
+      ansible.windows.win_shell: |
+        Set-Location "{{ psm_installationautomation_folder }}"
+        $secStrObj = ConvertTo-SecureString -String "{{ secure_vault_password }}" -Force
+        $Action = .\Execute-Stage.ps1 "{{ psm_registrationtool_folder }}\\RegistrationConfig.xml" `
+        -silentMode "Silent" -displayJson -spwdObj $secStrObj
+        $Action | Out-File -FilePath "{{ psm_registration_log }}"
+        $Result = Get-Content "{{ psm_registration_log }}" -Raw | ConvertFrom-Json
+        if ($Result.isSucceeded -ne 0) {
+            exit 1
+        } else {
+            exit 0
+        }
+      no_log: true
+
+    - name: Get log path for registration
+      ansible.windows.win_shell: |
+        $Result = Get-Content "{{ psm_registration_log }}"
+        Write-Output $Result
+      register: log_result
+      no_log: true
+
+    - name: Fetch registration log from path
+      ansible.builtin.fetch:
+        src: '{{ item.logPath }}'
+        dest: '{{ log_path_dest }}/psm_registration.log'
+        flat: true
+      with_items:
+        - "{{ log_result.stdout | from_json }}"
+
+    - name: Start PSM service & set to auto
+      ansible.windows.win_service:
+        name: "{{ psm_service_name }}"
+        start_mode: auto
+        state: started
+
+    - name: Check if PSM service is running
+      ansible.windows.win_service:
+        name: "{{ psm_service_name }}"
+      register: psm_service_info
+
+    - name: Set registration success as fact
+      ansible.builtin.set_fact:
+        psm_registered: true
+      when: psm_service_info.state == "running"
+
+  rescue:
+
+    - name: Get log path for registration
+      ansible.windows.win_shell: |
+        $Result = Get-Content "{{ psm_registration_log }}"
+        Write-Output $Result
+      register: log_result
+      no_log: true
+
+    - name: Fetch registration log from path
+      ansible.builtin.fetch:
+        src: '{{ item.logPath }}'
+        dest: '{{ log_path_dest }}/psm_registration.log'
+        flat: true
+      with_items:
+        - "{{ log_result.stdout | from_json }}"
+
+    - name: Fail when registration not successful
+      ansible.builtin.fail:
+        msg: 'ERROR: Registration failed. For more info check {{ log_path_dest }}/psm_registration.log'

@@ -1,0 +1,24 @@
+---
+collections:
+  # Required for Proxmox VM cloning, power management, and API interaction
+  - name: community.proxmox
+    version: ">=1.5.0"
+
+  # Required for native Windows configuration, AD roles, and WinRM tasks
+  - name: ansible.windows
+    version: ">=2.2.0"
+
+  # Required for extended Windows features (like AD domain joining and DHCP modules)
+  - name: community.windows
+    version: ">=2.1.0"
+
+roles:
+  - name: pvwa
+    src: https://github.com/cyberark/pvwa.git
+    scm: git
+  - name: cpm
+    src: https://github.com/cyberark/cpm.git
+    scm: git
+  - name: psm
+    src: https://github.com/cyberark/psm.git
+    scm: git

@@ -1,0 +1,130 @@
+---
+# tasks file for cpm registration
+
+- name: Registration Block
+  block:
+    - set_fact:
+        vault_ip_str: "{{ vault_ip }}"
+
+    - name: Concat DR vault ip to vault_ip_str
+      set_fact:
+        vault_ip_str: "{{ vault_ip_str }},{{ dr_vault_ip }}"
+      when: dr_vault_ip is defined
+
+    - name: Change Vault ip in CPMRegisterComponentConfig.xml
+      win_xml:
+        path: "{{ cpm_installationautomation_folder }}\\Registration\\CPMRegisterComponentConfig.xml"
+        fragment: "{{ vault_ip_str }}"
+        xpath: "//Parameter[@Name = 'vaultip']"
+        attribute: "Value"
+        type: attribute
+
+    - name: Change Vault Port in CPMRegisterComponentConfig.xml
+      win_xml:
+        path: "{{ cpm_installationautomation_folder }}\\Registration\\CPMRegisterComponentConfig.xml"
+        fragment: "{{ vault_port }}"
+        xpath: "//Parameter[@Name = 'vaultPort']"
+        attribute: "Value"
+        type: attribute
+
+    - name: Change Vault User in CPMRegisterComponentConfig.xml
+      win_xml:
+        path: "{{ cpm_installationautomation_folder }}\\Registration\\CPMRegisterComponentConfig.xml"
+        fragment: "{{ vault_username }}"
+        xpath: "//Parameter[@Name = 'vaultUser']"
+        attribute: "Value"
+        type: attribute
+
+    - name: Change CPM Install Directory in CPMRegisterComponentConfig.xml
+      win_xml:
+        path: "{{ cpm_installationautomation_folder }}\\Registration\\CPMRegisterComponentConfig.xml"
+        fragment: "{{ cpm_installation_path }}"
+        xpath: "//Parameter[@Name = 'installDirectory']"
+        attribute: "Value"
+        type: attribute
+
+    - name: Change CPM username in CPMRegisterComponentConfig.xml
+      win_xml:
+        path: "{{ cpm_installationautomation_folder }}\\Registration\\CPMRegisterComponentConfig.xml"
+        fragment: "{{ cpm_username }}"
+        xpath: "//Parameter[@Name = 'username']"
+        attribute: "Value"
+        type: attribute
+      when: cpm_username is defined
+
+    - name: Run CPM registration
+      win_shell: |
+        Set-Location "{{ cpm_registrationtool_folder }}"
+        #$ErrorActionPreference = "SilentlyContinue"
+        $secStrObj = ConvertTo-SecureString -String "{{ secure_vault_password }}" -Force
+        $Action = .\CPMRegisterCommponent.ps1 -spwdObj $secStrObj
+        $Action | Out-File -FilePath "{{ cpm_registration_log }}"
+        $Result = Get-Content "{{ cpm_registration_log }}" -Raw | ConvertFrom-Json
+        if ($Result.isSucceeded -ne 0) {
+          exit 1
+        } else {
+          exit 0
+        }
+      no_log: true
+
+    - name: Get log path for registration
+      win_shell: |
+        $Result = Get-Content "{{ cpm_registration_log }}"
+        Write-Output $Result
+      register: log_result
+      no_log: true
+
+    - name: Fetch registration log from path
+      fetch:
+        src: '{{ item.logPath }}'
+        dest: '{{ lookup("config", "DEFAULT_LOG_PATH") | dirname }}/cpm/{{ inventory_hostname }}_registration.log'
+        flat: yes
+      with_items:
+        - "{{ log_result.stdout | from_json }}"
+
+    - name: Start CPM service & set to auto
+      win_service:
+        name: "{{ cpm_service_name }}"
+        start_mode: auto
+        state: started
+
+    - name: Start CPM scanner service & set to auto
+      win_service:
+        name: "{{ cpm_scanner_service_name }}"
+        start_mode: auto
+        state: started
+
+    - name: Check if CPM service is running
+      win_service:
+        name: "{{ cpm_service_name }}"
+      register: cpm_service_info
+
+    - name: Check if CPM scanner service is running
+      win_service:
+        name: "{{ cpm_scanner_service_name }}"
+      register: cpm_scanner_service_info
+
+    - set_fact:
+        cpm_registered: true
+      when: cpm_service_info.state == "running" and cpm_scanner_service_info.state == "running"
+
+  rescue:
+
+    - name: Rescue - Get log path for registration
+      win_shell: |
+        $Result = Get-Content "{{ cpm_registration_log }}"
+        Write-Output $Result
+      register: log_result
+      no_log: true
+
+    - name: Rescue - Fetch registration log from path
+      fetch:
+        src: '{{ item.logPath }}'
+        dest: '{{ lookup("config", "DEFAULT_LOG_PATH") | dirname }}/cpm/{{ inventory_hostname }}_registration.log'
+        flat: yes
+      with_items:
+        - "{{ log_result.stdout | from_json }}"
+
+    - name: Rescue - Fail registration stage
+      fail:
+        msg: 'ERROR: Registration failed. For more info check {{ lookup("config", "DEFAULT_LOG_PATH") | dirname }}/cpm/{{ inventory_hostname }}_registration.log'

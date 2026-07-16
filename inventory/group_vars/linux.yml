@@ -1,0 +1,10 @@
+---
+# Connection
+ansible_user: "mgmt"
+ansible_password: "{{ vault_lab_password }}"
+ansible_connection: ssh
+ansible_port: 22
+
+# Provisioning
+ostype: l26
+ci_user: "mgmt"

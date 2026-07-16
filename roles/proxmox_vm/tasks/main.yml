@@ -1,0 +1,241 @@
+---
+# ==========================================
+# BLOCK 1: CLEANUP (Runs only if VM exists)
+# ==========================================
+- name: "Check if VM {{ vmid }} exists"
+  uri:
+    url: "https://{{ proxmox_api_host }}/api2/json/nodes/{{ target_node }}/qemu/{{ vmid }}/status/current"
+    method: GET
+    headers:
+      Authorization: "PVEAPIToken={{ proxmox_user }}!{{ proxmox_token_id }}={{ proxmox_token_secret }}"
+    validate_certs: false
+    status_code: [200, 500, 501]
+  register: vm_check
+  ignore_errors: yes
+  delegate_to: localhost
+
+- name: "Stop & Delete Existing VM"
+  block:
+    - name: "Force Stop VM"
+      uri:
+        url: "https://{{ proxmox_api_host }}/api2/json/nodes/{{ target_node }}/qemu/{{ vmid }}/status/stop"
+        method: POST
+        headers:
+          Authorization: "PVEAPIToken={{ proxmox_user }}!{{ proxmox_token_id }}={{ proxmox_token_secret }}"
+        validate_certs: false
+      ignore_errors: yes
+
+    - name: "Wait for Stop"
+      pause:
+        seconds: 5
+
+    - name: "Delete VM"
+      uri:
+        url: "https://{{ proxmox_api_host }}/api2/json/nodes/{{ target_node }}/qemu/{{ vmid }}"
+        method: DELETE
+        headers:
+          Authorization: "PVEAPIToken={{ proxmox_user }}!{{ proxmox_token_id }}={{ proxmox_token_secret }}"
+        validate_certs: false
+      register: delete_job
+
+    - name: "Wait for VM Deletion"
+      uri:
+        url: "https://{{ proxmox_api_host }}/api2/json/nodes/{{ target_node }}/tasks/{{ delete_job.json.data }}/status"
+        method: GET
+        headers:
+          Authorization: "PVEAPIToken={{ proxmox_user }}!{{ proxmox_token_id }}={{ proxmox_token_secret }}"
+        validate_certs: false
+      register: delete_status
+      until: delete_status.json.data.status == "stopped"
+      retries: 100
+      delay: 5
+
+  when: vm_check.status == 200
+  delegate_to: localhost
+
+# ==========================================
+# BLOCK 2: DEPLOYMENT
+# ==========================================
+- name: "Trigger Clone via API"
+  uri:
+    # Target Node executes the clone using its local template_id
+    url: "https://{{ proxmox_api_host }}/api2/json/nodes/{{ target_node }}/qemu/{{ template_id }}/clone"
+    method: POST
+    headers:
+      Authorization: "PVEAPIToken={{ proxmox_user }}!{{ proxmox_token_id }}={{ proxmox_token_secret }}"
+    body_format: form-urlencoded
+    body:
+      newid: "{{ vmid }}"
+      name: "{{ inventory_hostname }}"
+      target: "{{ target_node }}"
+      full: "1"
+      storage: "{{ storage_id }}"
+      format: "qcow2"
+    validate_certs: false
+  register: clone_response
+  delegate_to: localhost
+
+- name: "Wait for Clone Task"
+  uri:
+    # Check the task status directly on the Target Node
+    url: "https://{{ proxmox_api_host }}/api2/json/nodes/{{ target_node }}/tasks/{{ clone_response.json.data }}/status"
+    method: GET
+    headers:
+      Authorization: "PVEAPIToken={{ proxmox_user }}!{{ proxmox_token_id }}={{ proxmox_token_secret }}"
+    validate_certs: false
+  register: task_status
+  until: task_status.json.data.status == "stopped"
+  retries: 300
+  delay: 10
+  delegate_to: localhost
+  failed_when:
+    - task_status.json.data.exitstatus is defined
+    - task_status.json.data.exitstatus != "OK"
+
+- name: "Pause for Storage Sync"
+  pause:
+    seconds: 10
+
+- name: "Ensure Snippets Directory Exists on Proxmox Node"
+  file:
+    path: "/var/lib/vz/snippets"
+    state: directory
+  delegate_to: "{{ target_node }}"
+  vars:
+    ansible_user: "root"
+    target_physical_node: "{{ hostvars[inventory_hostname]['target_node'] }}"
+    ansible_password: "{{ hostvars[target_physical_node]['ansible_password'] }}"
+    ansible_ssh_common_args: '-o StrictHostKeyChecking=no'
+
+- name: "Drop Windows Plain-text Password Snippet"
+  copy:
+    dest: "/var/lib/vz/snippets/windows-{{ vmid }}.yaml"
+    content: |
+      #cloud-config
+      hostname: {{ inventory_hostname }}
+      users:
+        - name: Administrator
+          groups: Administrators
+          passwd: '{{ lab_password }}'
+          lock_passwd: false
+      chpasswd:
+        list: |
+          Administrator:{{ lab_password }}
+        expire: False
+      runcmd:
+        - powershell.exe -ExecutionPolicy Bypass -Command "Get-NetConnectionProfile | Set-NetConnectionProfile -NetworkCategory Private"
+        - cmd.exe /c netsh advfirewall firewall set rule group="Remote Desktop" new enable=Yes
+  delegate_to: "{{ target_node }}"
+  vars:
+    ansible_user: "root"
+    target_physical_node: "{{ hostvars[inventory_hostname]['target_node'] }}"
+    ansible_password: "{{ hostvars[target_physical_node]['ansible_password'] }}"
+    ansible_ssh_common_args: '-o StrictHostKeyChecking=no'
+
+- name: "Setup Cloud-Init (LVM Native)"
+  shell: |
+    # Use cicustom to bypass Proxmox SHA-512 hashing for Windows
+    qm set {{ vmid }} \
+      --ipconfig0 ip={{ ip }}/24,gw={{ gateway }} \
+      --nameserver '{{ dns_servers | replace(" ", ",") }}' \
+      --cicustom "user=local:snippets/windows-{{ vmid }}.yaml"
+  delegate_to: "{{ target_node }}"
+  vars:
+    ansible_user: "root"
+    target_physical_node: "{{ hostvars[inventory_hostname]['target_node'] }}"
+    ansible_password: "{{ hostvars[target_physical_node]['ansible_password'] }}"
+    ansible_ssh_common_args: '-o StrictHostKeyChecking=no'
+
+- name: "Configure Hardware"
+  community.proxmox.proxmox_kvm:
+    api_host: "{{ proxmox_api_host }}"
+    api_user: "{{ proxmox_user }}"
+    api_token_id: "{{ proxmox_token_id }}"
+    api_token_secret: "{{ proxmox_token_secret }}"
+    validate_certs: false
+    node: "{{ target_node }}"
+    vmid: "{{ vmid }}"
+    state: present
+    memory: 4096
+    cores: 2
+    net:
+      net0: "virtio={{ mac }},bridge={{ bridge }},tag={{ vlan_id }}"
+  delegate_to: localhost
+
+- name: "Start VM"
+  community.proxmox.proxmox_kvm:
+    api_host: "{{ proxmox_api_host }}"
+    api_user: "{{ proxmox_user }}"
+    api_token_id: "{{ proxmox_token_id }}"
+    api_token_secret: "{{ proxmox_token_secret }}"
+    validate_certs: false
+    node: "{{ target_node }}"
+    vmid: "{{ vmid }}"
+    state: started
+    timeout: 300
+  delegate_to: localhost
+
+# ==========================================
+# BLOCK 3: VALIDATION & SNAPSHOT
+# ==========================================
+- name: "[Smart Wait 1/2] Wait for IP (Initial)"
+  uri:
+    url: "https://{{ proxmox_api_host }}/api2/json/nodes/{{ target_node }}/qemu/{{ vmid }}/agent/network-get-interfaces"
+    method: GET
+    headers:
+      Authorization: "PVEAPIToken={{ proxmox_user }}!{{ proxmox_token_id }}={{ proxmox_token_secret }}"
+    validate_certs: false
+    status_code: [200, 500]
+  register: agent_check
+  until:
+    - agent_check.status == 200
+    - agent_check.json.data.result | default([]) | selectattr('ip-addresses', 'defined') | map(attribute='ip-addresses') | flatten | selectattr('ip-address', 'equalto', ip) | list | length > 0
+  retries: 100
+  delay: 5
+  delegate_to: localhost
+
+- name: "Settling Pause"
+  pause:
+    seconds: 30
+
+- name: "[Smart Wait 2/2] Wait for IP (Stability)"
+  uri:
+    url: "https://{{ proxmox_api_host }}/api2/json/nodes/{{ target_node }}/qemu/{{ vmid }}/agent/network-get-interfaces"
+    method: GET
+    headers:
+      Authorization: "PVEAPIToken={{ proxmox_user }}!{{ proxmox_token_id }}={{ proxmox_token_secret }}"
+    validate_certs: false
+    status_code: [200, 500]
+  register: final_agent_check
+  until:
+    - final_agent_check.status == 200
+    - final_agent_check.json.data.result | default([]) | selectattr('ip-addresses', 'defined') | map(attribute='ip-addresses') | flatten | selectattr('ip-address', 'equalto', ip) | list | length > 0
+  retries: 100
+  delay: 5
+  delegate_to: localhost
+
+- name: "Shutdown VM for Snapshot"
+  community.proxmox.proxmox_kvm:
+    api_host: "{{ proxmox_api_host }}"
+    api_user: "{{ proxmox_user }}"
+    api_token_id: "{{ proxmox_token_id }}"
+    api_token_secret: "{{ proxmox_token_secret }}"
+    validate_certs: false
+    node: "{{ target_node }}"
+    vmid: "{{ vmid }}"
+    state: stopped
+    timeout: 300
+  delegate_to: localhost
+
+- name: "Create Base Snapshot: Fresh_Install"
+  community.proxmox.proxmox_snap:
+    api_host: "{{ proxmox_api_host }}"
+    api_user: "{{ proxmox_user }}"
+    api_token_id: "{{ proxmox_token_id }}"
+    api_token_secret: "{{ proxmox_token_secret }}"
+    validate_certs: false
+    vmid: "{{ vmid }}"
+    snapname: "Fresh_Install"
+    description: "Base Build via Ansible"
+    state: present
+  delegate_to: localhost

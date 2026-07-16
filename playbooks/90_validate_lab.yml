@@ -1,0 +1,150 @@
+---
+- name: "Lab Validation & Health Check (Production Standard)"
+  hosts: dc-01
+  gather_facts: no
+  vars_files:
+    - ../inventory/group_vars/all.yml
+  vars:
+    ansible_connection: winrm
+    ansible_user: "administrator@lab.cybermark.tech"
+    ansible_password: "{{ vault_ansible_password }}"
+
+    # Validation Targets
+    target_user: "admin.vault"
+    target_group: "CyberArk_Vault_Admins"
+    target_ou: "OU=Tier0,OU=Administration,OU=Corp,{{ domain_dn }}"
+    target_computer: "pvwa-01"
+    
+    # --- CRITICAL: MATCHES YOUR PKI ROLE CA NAME ---
+    ca_common_name: "CyberArk-Lab-Root-CA" 
+
+  tasks:
+# --- 1. CORE AD SERVICES ---
+    - name: "1. Check Active Directory Services"
+      ansible.windows.win_service_info:
+        name: "{{ item }}"
+      register: svc_info
+      loop:
+        - adws       # Active Directory Web Services
+        - ntds       # Active Directory Domain Services
+        - dns        # DNS Server
+        - dhcpserver # DHCP Server
+        - certsvc    # Active Directory Certificate Services
+        - w3svc      # IIS (Required for CRL)
+      # FIX: Correctly reference the registered variable
+      failed_when: not svc_info.exists or svc_info.services[0].state != 'started'
+
+    # --- 2. PKI & CERTIFICATE SERVICES CHECK ---
+    - name: "2a. Verify Enterprise CA is Installed & Trusted"
+      ansible.windows.win_shell: |
+        $ErrorActionPreference = "Stop"
+        $CAName = "{{ ca_common_name }}"
+        
+        # 1. Check Registry (Confirms this server IS the CA)
+        $RegPath = "HKLM:\SYSTEM\CurrentControlSet\Services\CertSvc\Configuration\$CAName"
+        if (-not (Test-Path $RegPath)) { 
+            throw "CA Configuration for '$CAName' not found in Registry. Is the CA name correct?" 
+        }
+
+        # 2. Check Trusted Root Store (Confirms the server TRUSTS itself)
+        $RootCert = Get-ChildItem Cert:\LocalMachine\Root | Where-Object { $_.Subject -match $CAName }
+        if (-not $RootCert) {
+            throw "The CA Certificate is not in the Trusted Root Store."
+        }
+        
+        Write-Output "✅ CA Found & Trusted: $($RootCert.Subject)"
+      register: ca_check
+      changed_when: false
+      failed_when: ca_check.rc != 0
+    - name: "2b. Verify CRL (Revocation List) Accessibility"
+      ansible.windows.win_shell: |
+        $ErrorActionPreference = "Stop"
+        # Check if CRL exists on the filesystem (IIS Root)
+        $CrlPath = "C:\Windows\System32\CertSrv\CertEnroll\{{ ca_common_name }}.crl"
+        if (-not (Test-Path $CrlPath)) { throw "CRL file not found at $CrlPath" }
+        
+        # Check HTTP Accessibility
+        $crlUrl = "http://localhost/CertEnroll/{{ ca_common_name }}.crl"
+        try {
+            $request = [System.Net.WebRequest]::Create($crlUrl)
+            $response = $request.GetResponse()
+            $response.Close()
+            Write-Output "CRL is reachable via HTTP"
+        } catch {
+            throw "Failed to reach CRL via HTTP at $crlUrl. IIS might be misconfigured."
+        }
+      register: crl_check
+      changed_when: false
+      failed_when: crl_check.rc != 0
+
+    # --- 3. CORPORATE STRUCTURE CHECK ---
+    - name: "3a. Verify OU Structure (Tier 0)"
+      ansible.windows.win_shell: |
+        $ErrorActionPreference = "Stop"
+        if (-not (Get-ADOrganizationalUnit -Identity "{{ target_ou }}" -ErrorAction SilentlyContinue)) {
+             throw "OU '{{ target_ou }}' missing. Did ad_structure role run?"
+        }
+      register: ou_check
+      changed_when: false
+      failed_when: ou_check.rc != 0
+
+    - name: "3b. Verify Vault Admin '{{ target_user }}' Exists"
+      ansible.windows.win_shell: |
+        $ErrorActionPreference = "Stop"
+        if (-not (Get-ADUser -Identity "{{ target_user }}" -ErrorAction SilentlyContinue)) {
+             throw "User '{{ target_user }}' missing."
+        }
+      register: user_check
+      changed_when: false
+      failed_when: user_check.rc != 0
+
+    - name: "3c. Verify Security Group '{{ target_group }}'"
+      ansible.windows.win_shell: |
+        $ErrorActionPreference = "Stop"
+        if (-not (Get-ADGroup -Identity "{{ target_group }}" -ErrorAction SilentlyContinue)) {
+             throw "Group '{{ target_group }}' missing."
+        }
+      register: group_check
+      changed_when: false
+      failed_when: group_check.rc != 0
+
+    - name: "3d. Verify Computer Object '{{ target_computer }}'"
+      ansible.windows.win_shell: |
+        $ErrorActionPreference = "Stop"
+        if (-not (Get-ADComputer -Identity "{{ target_computer }}" -ErrorAction SilentlyContinue)) {
+             throw "Computer '{{ target_computer }}' missing."
+        }
+      register: computer_check
+      changed_when: false
+      failed_when: computer_check.rc != 0
+
+    # --- 4. INFRASTRUCTURE HEALTH ---
+    - name: "4a. Verify DNS Resolution (Internal)"
+      ansible.windows.win_shell: |
+        $ErrorActionPreference = "Stop"
+        Resolve-DnsName -Name "dc-02.{{ domain_name }}" -Type A
+      register: dns_check
+      changed_when: false
+      failed_when: dns_check.rc != 0
+
+    - name: "4b. Verify DHCP Scope is Active"
+      ansible.windows.win_shell: |
+        $ErrorActionPreference = "Stop"
+        $Scope = Get-DhcpServerv4Scope | Where-Object { $_.State -eq 'Active' }
+        if (-not $Scope) { throw "No Active DHCP Scopes Found" }
+        Write-Output "Scope $($Scope.ScopeId) is Active"
+      register: dhcp_check
+      changed_when: false
+
+    # --- REPORTING ---
+    - name: ">>> LAB STATUS REPORT <<<"
+      debug:
+        msg:
+          - "✅ AD Services:    RUNNING"
+          - "✅ PKI Service:    RUNNING (CA: {{ ca_common_name }})"
+          - "✅ CRL Access:     VALID (HTTP Reachable)"
+          - "✅ OU Structure:   VALID (Tier 0 Found)"
+          - "✅ User Check:     VALID ({{ target_user }})"
+          - "✅ Computer Check: VALID ({{ target_computer }})"
+          - "✅ DNS Health:     RESOLVED"
+          - "✅ DHCP Status:    ACTIVE"

@@ -1,0 +1,7 @@
+---
+# Change this to the actual path on your Linux Ansible server!
+pvwa_zip_file_path: "/tmp/cyberark/Password Vault Web Access.zip" # <-- UPDATE THIS
+pvwa_auth_type: "cyberark;ldap"
+pvwa_app_name: "PasswordVault"
+pvwa_iis_app_folder: "C:\\inetpub\\wwwroot\\PasswordVault"
+pvwa_url: "https://{{ ip }}/PasswordVault"

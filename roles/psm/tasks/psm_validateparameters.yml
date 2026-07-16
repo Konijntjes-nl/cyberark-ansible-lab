@@ -1,0 +1,60 @@
+---
+# tasks file for psm_validateparameters
+
+- name: Check EULA is accepted
+  ansible.builtin.fail:
+    msg: "You must accept EULA to start the playbook"
+  when: (accept_eula | type_debug != 'bool' and accept_eula | lower != "yes") or (accept_eula | type_debug == 'bool' and not accept_eula)
+
+- name: Set secure vault password
+  when:
+    - psm_registration
+  no_log: true
+  block:
+    - name: Set default value for vault_password
+      ansible.builtin.set_fact:
+        vault_password: ''
+      when: vault_password is undefined
+
+    - name: Set default value for secure_vault_password
+      ansible.builtin.set_fact:
+        secure_vault_password: ''
+      when: secure_vault_password is undefined
+
+    - name: Check if the user use 2 passwords
+      ansible.builtin.fail:
+        msg: "You must provide either vault_password or secure_vault_password parameter"
+      when:
+        - (vault_password != '')
+        - (secure_vault_password != '')
+
+    - name: Convert to securestring
+      ansible.windows.win_shell: |
+        $secure_vault_password_object = ConvertTo-SecureString "{{ vault_password }}" -AsPlainText -Force
+        $secure_vault_password_string = ConvertFrom-SecureString $secure_vault_password_object
+        write-output $secure_vault_password_string
+      register: secure_vault_password_string
+      when: vault_password != ''
+
+    - name: Set varible for secured vault password
+      ansible.builtin.set_fact:
+        secure_vault_password: "{{ secure_vault_password_string.stdout_lines[0] }}"
+        vault_password: ''
+      when: secure_vault_password == ''
+
+- name: Check PSM service status
+  ansible.windows.win_service:
+    name: "{{ psm_service_name }}"
+  register: psm_service_info
+
+- name: Set service info as fact
+  ansible.builtin.set_fact:
+    psm_exists: true
+  when: psm_service_info.exists
+
+- name: Check if PSM is registered
+  ansible.builtin.set_fact:
+    psm_registered: true
+  when:
+    - psm_service_info.exists
+    - psm_service_info.state == "running"

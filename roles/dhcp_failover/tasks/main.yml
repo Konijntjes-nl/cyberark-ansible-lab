@@ -1,0 +1,32 @@
+---
+- name: "Configure Hot Standby Failover"
+  ansible.windows.win_shell: |
+    $ErrorActionPreference = "Stop"
+    Import-Module DhcpServer -Force
+    
+    $Partner = "{{ dhcp_secondary_dc }}.{{ domain_name }}"
+    $FailoverName = "{{ dhcp_failover_name | default('Lab-Failover') }}"
+    $ScopeId = "{{ dhcp_scope_id }}"
+
+    # 1. Authorize Partner (Silently ignore if already done)
+    try { 
+        Add-DhcpServerInDC -DnsName $Partner -IPAddress {{ hostvars[dhcp_secondary_dc]['ansible_host'] }} -ErrorAction Stop 
+    } catch { 
+        Write-Host "Partner Auth skipped or failed (non-critical)" 
+    }
+
+    # 2. Create Failover Relationship
+    if (-not (Get-DhcpServerv4Failover -Name $FailoverName -ErrorAction SilentlyContinue)) {
+        Write-Host "Creating Failover Relationship..."
+        Add-DhcpServerv4Failover -Name $FailoverName -ScopeId $ScopeId -PartnerServer $Partner -Force
+    }
+
+    # 3. Enforce Hot Standby Mode
+    Set-DhcpServerv4Failover -Name $FailoverName -Mode HotStandby -ReservePercent 5 -Force
+
+  # --- CRITICAL FIX: DOUBLE HOP AUTHENTICATION ---
+  become: yes
+  become_method: runas
+  become_user: "{{ domain_admin_user }}"
+  vars:
+    ansible_become_password: "{{ lab_password }}"

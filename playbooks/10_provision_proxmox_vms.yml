@@ -1,0 +1,10 @@
+---
+- name: "Provision Lab Infrastructure"
+  hosts: windows,linux
+  gather_facts: no
+  serial: 2           # Critical: Process one VM at a time to save Storage I/O
+  vars_files:
+    - ../inventory/group_vars/all.yml
+
+  roles:
+    - role: proxmox_vm

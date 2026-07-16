@@ -1,0 +1,6 @@
+---
+# Change this to the actual path on your Linux Ansible server!
+cpm_zip_file_path: "/tmp/cyberark/Central Policy Manager.zip" # <-- UPDATE THIS
+cpm_installation_drive: "C:"
+cpm_username: "PasswordManager"
+cpm_vault_passcode: "{{ lab_password }}"

@@ -1,0 +1,119 @@
+---
+# ==========================================
+# PRIMARY DC (DC-01) CONFIGURATION
+# ==========================================
+- name: "Install AD & DHCP Roles"
+  ansible.windows.win_feature:
+    name:
+      - AD-Domain-Services
+      - DHCP
+      - RSAT-AD-PowerShell
+    include_management_tools: yes
+    state: present
+
+- name: "Promote Primary DC"
+  microsoft.ad.domain:
+    dns_domain_name: "{{ domain_name }}"
+    domain_netbios_name: "{{ domain_netbios }}"
+    safe_mode_password: "{{ safe_mode_password }}"
+    install_dns: yes
+  register: ad_promo_primary
+  when: inventory_hostname == 'dc-01'
+
+- name: "Reboot Primary DC if Promoted"
+  ansible.windows.win_reboot:
+    msg: "Rebooting after AD Promotion"
+    post_reboot_delay: 180
+  when: 
+    - inventory_hostname == 'dc-01'
+    - ad_promo_primary.reboot_required
+
+- name: "Create Reverse DNS Zone"
+  ansible.windows.win_shell: |
+    $ZoneName = "3.0.10.in-addr.arpa"
+    if (-not (Get-DnsServerZone -Name $ZoneName -ErrorAction SilentlyContinue)) {
+        Add-DnsServerPrimaryZone -NetworkId "10.0.3.0/24" -ReplicationScope Forest
+    }
+  register: dns_create
+  retries: 20
+  delay: 30
+  until: dns_create is success
+  when: inventory_hostname == 'dc-01'
+
+- name: "Authorize DHCP & Create Scope"
+  ansible.windows.win_shell: |
+    Add-DhcpServerInDC -DnsName "{{ inventory_hostname }}.{{ domain_name }}" -IPAddress {{ ansible_host }}
+    
+    if (-not (Get-DhcpServerv4Scope -ScopeId 10.0.3.0 -ErrorAction SilentlyContinue)) {
+        Add-DhcpServerv4Scope -Name "LabScope" -StartRange 10.0.3.100 -EndRange 10.0.3.200 -SubnetMask 255.255.255.0 -State Active
+        Set-DhcpServerv4OptionValue -ScopeId 10.0.3.0 -DnsDomain {{ domain_name }} -DnsServer {{ ansible_host }}
+        Set-DhcpServerv4OptionValue -ScopeId 10.0.3.0 -Router {{ gateway }}
+    }
+  when: inventory_hostname == 'dc-01'
+
+# --- THIS IS THE CRITICAL MISSING LOOP ---
+- name: "Import Reservations from Inventory"
+  ansible.windows.win_shell: |
+    $ErrorActionPreference = "Stop"
+    $ScopeId = "10.0.3.0"
+    $IP   = "{{ hostvars[item]['ip'] }}"
+    $MAC  = "{{ hostvars[item]['mac'] }}".Replace(':', '-')
+    $Name = "{{ item }}"
+    $Zone = "{{ domain_name }}"
+    $ReverseZone = "3.0.10.in-addr.arpa"
+
+    # DHCP Reservation
+    if (-not (Get-DhcpServerv4Reservation -IPAddress $IP -ErrorAction SilentlyContinue)) {
+        Add-DhcpServerv4Reservation -ScopeId $ScopeId -IPAddress $IP -ClientId $MAC -Name $Name
+    }
+
+    # DNS A Record
+    if (-not (Get-DnsServerResourceRecord -ZoneName $Zone -Name $Name -RRType A -ErrorAction SilentlyContinue)) {
+        Add-DnsServerResourceRecordA -Name $Name -ZoneName $Zone -IPv4Address $IP
+    }
+
+    # DNS PTR Record
+    $Octet = $IP.Split('.')[-1]
+    if (-not (Get-DnsServerResourceRecord -ZoneName $ReverseZone -Name $Octet -RRType Ptr -ErrorAction SilentlyContinue)) {
+        Add-DnsServerResourceRecordPtr -Name $Octet -ZoneName $ReverseZone -PtrDomainName "$Name.$Zone"
+    }
+  # Combines both groups to get all IPs
+  loop: "{{ groups['windows'] + groups['linux'] }}"
+  when: 
+    - inventory_hostname == 'dc-01'
+    - hostvars[item]['ip'] is defined
+
+# ==========================================
+# SECONDARY DC (DC-02) CONFIGURATION
+# ==========================================
+- name: "Point DNS to Primary DC"
+  ansible.windows.win_dns_client:
+    adapter_names: '*'
+    dns_servers:
+      - "10.0.3.1"
+  when: inventory_hostname == 'dc-02'
+
+- name: "Promote Secondary DC"
+  microsoft.ad.domain_controller:
+    dns_domain_name: "{{ domain_name }}"
+    domain_admin_user: "{{ domain_admin_user }}"
+    domain_admin_password: "{{ domain_admin_password }}"
+    safe_mode_password: "{{ safe_mode_password }}"
+    install_dns: yes
+    state: domain_controller
+  register: ad_promo_secondary
+  when: inventory_hostname == 'dc-02'
+
+- name: "Reboot Secondary DC if Promoted"
+  ansible.windows.win_reboot:
+    msg: "Rebooting Secondary DC"
+    post_reboot_delay: 180
+  when: 
+    - inventory_hostname == 'dc-02'
+    - ad_promo_secondary.reboot_required
+
+- name: "DHCP Post-Install (Secondary)"
+  ansible.windows.win_shell: |
+    Add-DhcpServerSecurityGroup -ErrorAction SilentlyContinue
+    Restart-Service dhcpserver
+  when: inventory_hostname == 'dc-02'

@@ -1,0 +1,56 @@
+---
+
+driver:
+  name: ec2
+  interface: private
+
+transport:
+  name: winrm
+  port: 5986
+  winrm_transport: ssl
+  ssl: true
+  connect_timeout: 60
+  connection_retries: 5
+  username: Administrator
+  password: Nopass123
+
+provisioner:
+  name: ansible_push
+  verbose: "vvv"
+  chef_bootstrap_url: nil
+  remote_user: Administrator
+  ansible_port: 5986
+  ansible_connection: winrm
+  pass_transport_password: true
+  raw_arguments: "--timeout=3600"
+  ansible_config: tests/ansible.cfg
+  ansible_playbook_bin: .testenv/bin/ansible-playbook
+  playbook: tests/default.yml
+
+platforms:
+  - name: psm
+    driver_plugin: ec2
+    driver_config:
+      instance_type: c4.2xlarge
+      associate_public_ip: false
+      subnet_filter:
+        tag: 'Name'
+        value: 'Jenkins Private Subnet'
+      security_group_filter:
+        name: 'ansible-sg'
+      tags:
+        created-by: test-kitchen
+        component-type: psm
+        kitchen-type: psm
+      block_device_mappings:
+        - device_name: /dev/sda1
+          ebs:
+            volume_size: 30
+            delete_on_termination: true
+      image_search:
+        owner-id: 801119661308
+        name: Windows_Server-2016-English-Full-Base-20*
+      user_data: tests/scripts/user_data_windows_2016.ps1
+
+suites:
+  - name: default

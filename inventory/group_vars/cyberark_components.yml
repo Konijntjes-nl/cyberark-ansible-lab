@@ -1,0 +1,4 @@
+vault_ip: "10.0.3.3" # Points to vault-01
+vault_username: "Administrator"
+vault_password: "{{ lab_password }}"
+accept_eula: "Yes"

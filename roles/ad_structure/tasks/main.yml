@@ -1,0 +1,149 @@
+---
+# ==============================================================================
+# CORPORATE DIRECTORY STRUCTURE (Production Standard)
+# ==============================================================================
+
+- name: "1. Create Organizational Units (Corporate Hierarchy)"
+  microsoft.ad.ou:
+    name: "{{ item.name }}"
+    path: "{{ item.path }}"
+    state: present
+    protect_from_deletion: yes
+  loop:
+    # --- ROOT ORGANIZATION ---
+    - { name: "Corp",           path: "{{ domain_dn }}" }
+
+    # --- ADMINISTRATIVE TIER (Privileged Accounts) ---
+    - { name: "Administration", path: "OU=Corp,{{ domain_dn }}" }
+    - { name: "Tier0",          path: "OU=Administration,OU=Corp,{{ domain_dn }}" } # Vault Admins / Domain Admins
+    - { name: "Tier1",          path: "OU=Administration,OU=Corp,{{ domain_dn }}" } # Server Admins
+    - { name: "CyberArk_Roles", path: "OU=Administration,OU=Corp,{{ domain_dn }}" } # RBAC Groups
+
+    # --- INFRASTRUCTURE (Servers & Computers) ---
+    - { name: "Infrastructure", path: "OU=Corp,{{ domain_dn }}" }
+    - { name: "Servers",        path: "OU=Infrastructure,OU=Corp,{{ domain_dn }}" }
+    - { name: "Management",     path: "OU=Servers,OU=Infrastructure,OU=Corp,{{ domain_dn }}" } # PVWA/CPM
+    - { name: "Proxies",        path: "OU=Servers,OU=Infrastructure,OU=Corp,{{ domain_dn }}" } # PSM/PSMP
+
+    # --- EMPLOYEES (Standard Users) ---
+    - { name: "People",         path: "OU=Corp,{{ domain_dn }}" }
+    - { name: "Employees",      path: "OU=People,OU=Corp,{{ domain_dn }}" }
+
+    # --- SERVICE ACCOUNTS ---
+    - { name: "ServiceAccounts",path: "OU=Corp,{{ domain_dn }}" }
+
+- name: "2. Create CyberArk Role-Based Groups"
+  microsoft.ad.group:
+    name: "{{ item.name }}"
+    path: "{{ item.path }}"
+    description: "{{ item.desc }}"
+    scope: global
+    category: security
+    state: present
+  loop:
+    # --- TIER 0 ROLES (Security) ---
+    - { name: "CyberArk_Vault_Admins",  path: "OU=CyberArk_Roles,OU=Administration,OU=Corp,{{ domain_dn }}", desc: "Full Control of the CyberArk Vault" }
+    - { name: "CyberArk_Auditors",      path: "OU=CyberArk_Roles,OU=Administration,OU=Corp,{{ domain_dn }}", desc: "Read-Only Compliance Access" }
+
+    # --- TIER 1 ROLES (Server Management) ---
+    - { name: "Safe_Windows_Admins",    path: "OU=CyberArk_Roles,OU=Administration,OU=Corp,{{ domain_dn }}", desc: "Safe Access for Windows Server Credentials" }
+    - { name: "Safe_Linux_Admins",      path: "OU=CyberArk_Roles,OU=Administration,OU=Corp,{{ domain_dn }}", desc: "Safe Access for Linux Server Credentials" }
+
+    # --- PLATFORM GROUPS (Functional) ---
+    - { name: "Windows_Server_Admins",  path: "OU=Tier1,OU=Administration,OU=Corp,{{ domain_dn }}",          desc: "AD Group for Local Admin Rights on Windows Servers" }
+    - { name: "Linux_Server_Admins",    path: "OU=Tier1,OU=Administration,OU=Corp,{{ domain_dn }}",          desc: "AD Group for Sudo Rights on Linux Servers" }
+
+    # --- TIER 2 ROLES (Business Users) ---
+    - { name: "Safe_Business_Users",    path: "OU=CyberArk_Roles,OU=Administration,OU=Corp,{{ domain_dn }}", desc: "Safe Access for Standard Business Apps" }
+
+- name: "3. Create Users (Production Identities)"
+  microsoft.ad.user:
+    # --- IDENTITY ---
+    name: "{{ item.first }} {{ item.last }}"
+    display_name: "{{ item.first }} {{ item.last }}"
+    sam_account_name: "{{ item.name }}"
+    upn: "{{ item.name }}@{{ domain_name }}"
+
+    # --- STANDARD FIELDS ---
+    firstname: "{{ item.first }}"
+    surname: "{{ item.last }}"
+    description: "{{ item.desc }}"
+    path: "{{ item.path }}"
+    password: "{{ vault_lab_password }}"
+    state: present
+    enabled: yes
+    password_expired: yes
+
+    # --- GROUPS ---
+    groups: "{{ {'add': item.groups} if item.groups is defined else omit }}"
+
+    # --- ATTRIBUTES ---
+    attributes:
+      set:
+        department: "{{ item.dept | default(omit) }}"
+        title: "{{ item.title | default(omit) }}"
+
+  loop:
+    # ==========================================
+    # TIER 0: SECURITY & VAULT ADMINS
+    # ==========================================
+    - { name: "admin.vault",  first: "Vault",    last: "Admin",    path: "OU=Tier0,OU=Administration,OU=Corp,{{ domain_dn }}",    groups: ["CyberArk_Vault_Admins", "Domain Admins"], desc: "Primary Vault Administrator", dept: "Security", title: "Security Architect" }
+    - { name: "admin.audit",  first: "Compliance",last: "Auditor", path: "OU=Tier0,OU=Administration,OU=Corp,{{ domain_dn }}",    groups: ["CyberArk_Auditors"],                      desc: "Internal Auditor", dept: "Audit",    title: "Compliance Officer" }
+
+    # ==========================================
+    # TIER 1: INFRASTRUCTURE ADMINS
+    # ==========================================
+    - { name: "admin.win",    first: "Windows",  last: "Admin",    path: "OU=Tier1,OU=Administration,OU=Corp,{{ domain_dn }}",    groups: ["Windows_Server_Admins", "Safe_Windows_Admins"], desc: "Lead Windows Engineer", dept: "Infrastructure", title: "SysAdmin" }
+    - { name: "admin.linux",  first: "Linux",    last: "Admin",    path: "OU=Tier1,OU=Administration,OU=Corp,{{ domain_dn }}",    groups: ["Linux_Server_Admins", "Safe_Linux_Admins"],     desc: "Lead Linux Engineer",   dept: "Infrastructure", title: "DevOps Engineer" }
+    - { name: "ops.support",  first: "Ops",      last: "Support",  path: "OU=Tier1,OU=Administration,OU=Corp,{{ domain_dn }}",    groups: ["Safe_Windows_Admins"],                          desc: "L2 Operations Support", dept: "Operations",     title: "Ops Analyst" }
+
+    # ==========================================
+    # TIER 2: STANDARD BUSINESS EMPLOYEES
+    # ==========================================
+    - { name: "alice.user",   first: "Alice",    last: "User",     path: "OU=Employees,OU=People,OU=Corp,{{ domain_dn }}",         groups: ["Safe_Business_Users"],                    desc: "HR Manager",         dept: "HR",       title: "Manager" }
+    - { name: "bob.user",     first: "Bob",      last: "User",     path: "OU=Employees,OU=People,OU=Corp,{{ domain_dn }}",         groups: ["Safe_Business_Users"],                    desc: "Finance Analyst",    dept: "Finance",  title: "Analyst" }
+    - { name: "charlie.user", first: "Charlie",  last: "User",     path: "OU=Employees,OU=People,OU=Corp,{{ domain_dn }}",         groups: ["Safe_Business_Users"],                    desc: "Sales Representative",dept: "Sales",   title: "Rep" }
+
+    # ==========================================
+    # SERVICE ACCOUNTS
+    # ==========================================
+    - { name: "svc_nessus",   first: "Service",  last: "Nessus",   path: "OU=ServiceAccounts,OU=Corp,{{ domain_dn }}",                                                                 desc: "Vulnerability Scanner Agent", dept: "SecOps", title: "Service Account" }
+    - { name: "svc_backup",   first: "Service",  last: "Backup",   path: "OU=ServiceAccounts,OU=Corp,{{ domain_dn }}",             groups: ["Domain Admins"],                          desc: "Legacy Backup Agent (Privileged)", dept: "Infra", title: "Service Account" }
+
+- name: "4. Create LDAP Bind Account"
+  microsoft.ad.user:
+    name: "svc_cyberark_bind"
+    firstname: "CyberArk"
+    surname: "Bind"
+    sam_account_name: "svc_cyberark_bind"
+    upn: "svc_cyberark_bind@{{ domain_name }}"
+    description: "Read-Only account for CyberArk Directory Mapping"
+    path: "OU=ServiceAccounts,OU=Corp,{{ domain_dn }}"
+    password: "{{ vault_lab_password }}"
+    enabled: yes
+    state: present
+
+- name: "5. Pre-stage CyberArk Component Servers"
+  microsoft.ad.computer:
+    name: "{{ item.name }}"
+    # --- FIX: ADDED 'OU=' BEFORE THE ITEM VARIABLE ---
+    path: "OU={{ item.ou }},OU=Servers,OU=Infrastructure,OU=Corp,{{ domain_dn }}"
+    enabled: yes
+    state: present
+    attributes:
+      set:
+        description: "{{ item.desc }}"
+  loop:
+    # --- MANAGEMENT (Secure Zone) ---
+    - { name: "pvwa-01",   ou: "Management", desc: "Password Vault Web Access 01" }
+    - { name: "pvwa-02",   ou: "Management", desc: "Password Vault Web Access 02" }
+    - { name: "cpm-01",    ou: "Management", desc: "Central Policy Manager 01" }
+    - { name: "cpm-02",    ou: "Management", desc: "Central Policy Manager 02" }
+
+    # --- PROXIES (Jump Zone) ---
+    - { name: "psm-01",    ou: "Proxies",    desc: "Privileged Session Manager 01" }
+    - { name: "psm-02",    ou: "Proxies",    desc: "Privileged Session Manager 02" }
+    - { name: "psmp-01",   ou: "Proxies",    desc: "PSM for SSH 01" }
+    - { name: "psmp-02",   ou: "Proxies",    desc: "PSM for SSH 02" }
+    - { name: "htmlgw-01", ou: "Proxies",    desc: "HTML5 Gateway 01" }
+    - { name: "htmlgw-02", ou: "Proxies",    desc: "HTML5 Gateway 02" }

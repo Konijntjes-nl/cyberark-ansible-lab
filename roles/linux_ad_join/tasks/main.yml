@@ -1,0 +1,49 @@
+---
+- name: "Install AD Membership Packages"
+  ansible.builtin.package:
+    name:
+      - realmd
+      - sssd
+      - oddjob
+      - oddjob-mkhomedir
+      - adcli
+      - samba-common
+      - samba-common-tools
+    state: present
+
+- name: "Discover Realm"
+  ansible.builtin.command: /usr/sbin/realm discover {{ domain_name }}
+  register: realm_discover
+  changed_when: false
+
+- name: "Join System to AD ({{ domain_name }})"
+  # We pipe the password into realm join to avoid interactive prompt
+  ansible.builtin.shell: |
+    echo "{{ vault_domain_admin_password }}" | realm join -U "{{ domain_admin_user.split('@')[0] }}" "{{ domain_name }}"
+  # Only run if we are NOT currently in the domain
+  when: 
+    - realm_discover.stdout.find("configured: no") != -1
+  register: realm_join
+  no_log: true # Protects password from logs
+
+- name: "Configure SSSD (Optional: Remove Domain Suffix for Login)"
+  ansible.builtin.lineinfile:
+    path: /etc/sssd/sssd.conf
+    regexp: '^use_fully_qualified_names'
+    line: 'use_fully_qualified_names = False'
+    state: present
+  notify: Restart SSSD
+
+- name: "Configure SSSD (Home Directory Creation)"
+  ansible.builtin.lineinfile:
+    path: /etc/sssd/sssd.conf
+    regexp: '^fallback_homedir'
+    line: 'fallback_homedir = /home/%u'
+    state: present
+  notify: Restart SSSD
+
+handlers:
+  - name: Restart SSSD
+    ansible.builtin.service:
+      name: sssd
+      state: restarted

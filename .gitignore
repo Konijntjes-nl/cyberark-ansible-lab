@@ -1,0 +1,22 @@
+# Ansible artifacts
+# Temporary / Hidden files
+.ansible/
+.idea/
+.vscode/
+*.swp
+.DS_Store
+# Ansible retry files
+*.retry
+
+# Ansible Vault password files (Never commit the key!)
+.vault_pass.txt
+vault_pass.txt
+
+# Local temporary staging directories
+/cyberark-binaries/
+/temp/
+
+# Log files
+*.log
+# (Optional) Ignore your specific inventory if it contains sensitive IPs
+# inventory/hosts

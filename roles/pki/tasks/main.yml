@@ -1,0 +1,56 @@
+---
+- name: "Install AD CS Roles"
+  ansible.windows.win_feature:
+    name:
+      - AD-Certificate
+      - ADCS-Cert-Authority
+      - ADCS-Web-Enrollment
+      - RSAT-ADCS
+    include_management_tools: yes
+    state: present
+
+- name: "Configure Enterprise Root CA"
+  ansible.windows.win_shell: |
+    $ErrorActionPreference = 'Stop'
+    $CAName = "CyberArk-Lab-Root-CA"
+    $Service = Get-Service CertSvc -ErrorAction SilentlyContinue
+    
+    if ($Service.Status -ne 'Running') {
+        Install-AdcsCertificationAuthority -CAType EnterpriseRootCa `
+            -CryptoProviderName "RSA#Microsoft Software Key Storage Provider" `
+            -KeyLength 4096 `
+            -HashAlgorithmName SHA256 `
+            -CACommonName $CAName `
+            -ValidityPeriod Years `
+            -ValidityPeriodUnits 5 `
+            -Force `
+            -Confirm:$false
+    }
+    Install-AdcsWebEnrollment -Force -Confirm:$false
+
+    # Registry Tuning
+    certutil -setreg 'Policy\EditFlags' '+EDITF_ATTRIBUTENDROUTING'
+    certutil -setreg 'CA\CRLPeriodUnits' 1
+    certutil -setreg 'CA\CRLPeriod' 'Years'
+    certutil -setreg 'CA\CRLDeltaPeriodUnits' 0
+  # --- ORIGINAL LOGIC RESTORED: BECOME DOMAIN ADMIN ---
+  become: yes
+  become_method: runas
+  become_user: "{{ domain_admin_user }}"
+
+- name: "Copy Template Script"
+  ansible.windows.win_copy:
+    src: FixTemplates.ps1
+    dest: "C:\\Windows\\Temp\\FixTemplates.ps1"
+
+- name: "Execute Template Script"
+  ansible.windows.win_shell: "& C:\\Windows\\Temp\\FixTemplates.ps1"
+  # --- ORIGINAL LOGIC RESTORED: BECOME DOMAIN ADMIN ---
+  become: yes
+  become_method: runas
+  become_user: "{{ domain_admin_user }}"
+
+- name: "Remove Template Script"
+  ansible.windows.win_file:
+    path: "C:\\Windows\\Temp\\FixTemplates.ps1"
+    state: absent
