@@ -50,7 +50,7 @@
       retries: 100
       delay: 5
 
-  when: vm_check.status == 200
+  when: vm_check.status | default(0) == 200
   delegate_to: localhost
 
 # ==========================================
@@ -213,6 +213,44 @@
   retries: 100
   delay: 5
   delegate_to: localhost
+
+- name: "Activation: Switch DNS to Gateway (Internet Access)"
+  ansible.windows.win_shell: |
+    $adapter = Get-NetAdapter | Where-Object {$_.Status -eq "Up"}
+    Set-DnsClientServerAddress -InterfaceIndex $adapter.InterfaceIndex -ServerAddresses "10.0.3.254"
+  when: ostype in ['win2019', 'win2025']
+
+- name: "Activation: Copy MAS_AIO.cmd to Windows Target"
+  ansible.windows.win_copy:
+    src: "MAS_AIO.cmd"
+    dest: "C:\\MAS_AIO.cmd"
+  when: ostype == 'win10' or ostype == 'win2025' # Adjust for your specific OS tags
+
+- name: "Activation: Revert DNS to Domain Controllers"
+  ansible.windows.win_shell: |
+    $adapter = Get-NetAdapter | Where-Object {$_.Status -eq "Up"}
+    Set-DnsClientServerAddress -InterfaceIndex $adapter.InterfaceIndex -ServerAddresses "10.0.3.1", "10.0.3.2"
+  when: ostype in ['win2019', 'win2025']
+
+- name: "Activation: Run MAS_AIO.cmd in Silent Mode"
+  ansible.windows.win_shell: |
+    C:\MAS_AIO.cmd  /K-Windows
+  when: ostype == 'win10' or ostype == 'win2025'
+  register: mas_activation
+  ignore_errors: yes
+
+- name: "Activation: Cleanup MAS_AIO.cmd"
+  ansible.windows.win_file:
+    path: "C:\\MAS_AIO.cmd"
+    state: absent
+  when: ostype == 'win10' or ostype == 'win2019'
+
+- name: "Activation: Cleanup CloudBase-Init"
+  ansible.windows.win_file:
+    path: "C:\\CloudBaseInitSetup_Stable_x64"
+    state: absent
+  when: ostype == 'win10' or ostype == 'win2019'
+
 
 - name: "Shutdown VM for Snapshot"
   community.proxmox.proxmox_kvm:

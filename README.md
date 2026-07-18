@@ -53,11 +53,11 @@ The automation handles end-to-end deployment, moving from bare-metal VM clones t
 The following features are slated for upcoming releases to complete the CyberArk PAM deployment:
 
 * **Automated Domain Joins**
-  * Automatically join all CyberArk Component servers (PVWA, CPM, PSM, HTMLGW) to `lab.cybermark.tech`.
+  * Automatically join all CyberArk Component servers (PVWA, CPM, PSM) to `lab.cybermark.tech`.
   * *Strictly excludes Digital Vaults (which must remain isolated Workgroup machines) and Linux servers.*
 * **CyberArk Component Rollouts**
   * Component-specific Ansible playbooks leveraging the official CyberArk roles.
-  * Automated silent installation of the Password Vault Web Access (PVWA).
+  * Automated silent installation of the CyberArk Components (PVWA, CPM, PSM, HTMLGW, PSMP)
   * Automated deployment of the Central Policy Manager (CPM) and Privileged Session Manager (PSM).
 * **Digital Vault Architecture**
   * Automated silent installation of the Primary Digital Vault.

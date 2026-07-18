@@ -1,0 +1,44 @@
+---
+- name: "Destroy Lab Infrastructure"
+  # Target all VM groups, but explicitly exclude the proxmox_nodes group
+  hosts: windows,linux
+  gather_facts: no
+  serial: 2 # Don't overwhelm the Proxmox API by deleting 15 VMs at once
+
+  vars_files:
+    - ../inventory/group_vars/all.yml
+
+  tasks:
+    # --- 0. SAFETY CHECK ---
+    - name: "SAFETY CHECK: Confirm VM Destruction"
+      ansible.builtin.pause:
+        prompt: "🚨 DANGER: You are about to completely DESTROY the targeted VMs. Press Enter to proceed or Ctrl+C to abort."
+      # run_once ensures you only get prompted one time, regardless of how many VMs are targeted
+      run_once: true 
+
+    # --- 1. STOP VM ---
+    - name: "1. Force Stop VM {{ vmid }}"
+      community.proxmox.proxmox_kvm:
+        api_host: "{{ proxmox_api_host }}"
+        api_user: "{{ proxmox_user }}"
+        api_token_id: "{{ proxmox_token_id }}"
+        api_token_secret: "{{ proxmox_token_secret }}"
+        node: "{{ target_node }}"
+        vmid: "{{ vmid }}"
+        state: stopped
+        force: yes
+        timeout: 60
+      delegate_to: localhost
+      ignore_errors: yes # Ignore if the VM is already stopped or doesn't exist
+
+    # --- 2. DELETE VM ---
+    - name: "2. Destroy VM {{ vmid }}"
+      community.proxmox.proxmox_kvm:
+        api_host: "{{ proxmox_api_host }}"
+        api_user: "{{ proxmox_user }}"
+        api_token_id: "{{ proxmox_token_id }}"
+        api_token_secret: "{{ proxmox_token_secret }}"
+        node: "{{ target_node }}"
+        vmid: "{{ vmid }}"
+        state: absent # This triggers the deletion of the VM and its disks
+      delegate_to: localhost

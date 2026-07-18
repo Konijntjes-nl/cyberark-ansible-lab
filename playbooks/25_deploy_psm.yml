@@ -1,0 +1,52 @@
+---
+- name: Map custom IP variable to ansible_host
+  hosts: cyberark_components
+  gather_facts: false
+  tasks:
+    - name: Set ansible_host for WinRM connections
+      set_fact:
+        ansible_host: "{{ ip }}"
+
+- name: Deploy Password Vault Web Access (PVWA)
+  hosts: pvwa
+  gather_facts: yes
+  roles:
+    - role: pvwa
+      vars:
+        pvwa_extract: true
+        pvwa_ignore_checksum: true
+        pvwa_prerequisites: true
+        pvwa_install: true
+        pvwa_hardening: true
+        pvwa_registration: true
+        pvwa_clean: true
+
+- name: Deploy Central Policy Manager (CPM)
+  hosts: cpm
+  gather_facts: yes
+  serial: 1
+  roles:
+    - role: cpm
+      vars:
+        cpm_extract: true
+        cpm_ignore_checksum: true
+        cpm_prerequisites: true
+        cpm_install: true
+        cpm_hardening: true
+        cpm_registration: true
+        cpm_clean: true
+
+- name: Deploy Privileged Session Manager (PSM)
+  hosts: psm
+  gather_facts: yes
+  roles:
+    - role: psm
+      vars:
+        psm_extract: true
+        psm_ignore_checksum: true
+        psm_prerequisites: true
+        psm_install: true
+        psm_postinstall: true
+        psm_hardening: true
+        psm_registration: true
+        psm_clean: true

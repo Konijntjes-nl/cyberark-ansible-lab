@@ -1,0 +1,35 @@
+# --- Proxmox API ---
+proxmox_api_host: "proxmox01.int.cybermark.tech:443"
+proxmox_user: "ansible@pve"
+proxmox_token_id: "provisioner"
+proxmox_token_secret: "{{ vault_proxmox_token_secret }}"
+
+# --- Infrastructure ---
+storage_id: "vm"
+bridge: "vmbr0"
+vlan_id: "30"
+
+# --- Network Defaults ---
+gateway: "10.0.3.254"
+dns_servers: "10.0.3.1 10.0.3.2"
+
+# --- Secrets / Passwords ---
+# Note: Ensure these are defined in your encrypted vault.yml
+lab_password: "{{ vault_lab_password }}"
+#vault_ansible_password: "{{ vault_ansible_password }}"
+
+# --- Domain Settings ---
+domain_name: "{{ vault_domain_name }}"
+domain_netbios: "{{ vault_domain_netbios }}"
+domain_dn: "{{ domain_name.split('.') | map('regex_replace', '^', 'DC=') | join(',') }}"
+
+
+domain_admin_user: "{{ domain_netbios }}\\Administrator"
+domain_admin_password: "{{ vault_lab_password }}"
+safe_mode_password: "{{ vault_lab_password }}"
+#vault_domain_admin_password: "{{ vault_lab_password }}"
+ci_user: "administrator"
+
+# Proxmox Root Passwords (For Cloud-Init Injection)
+proxmox02_root_password: "{{ vault_proxmox02_root_password }}"
+proxmox03_root_password: "{{ vault_proxmox03_root_password }}"

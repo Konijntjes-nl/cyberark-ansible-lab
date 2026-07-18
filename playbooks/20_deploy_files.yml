@@ -1,0 +1,37 @@
+---
+- name: "Mount CyberArk Installation Binaries (ISO)"
+  hosts: vault, pvwa, cpm, psm
+  gather_facts: no
+  vars:
+    # Adjust these to match the exact file name and storage pool in your Proxmox GUI
+    iso_storage_pool: "local"
+    cyberark_iso_name: "CyberArk_PAS_Installers.iso"
+
+  tasks:
+    - name: "Attach ISO to Virtual Machine (IDE2)"
+      community.proxmox.proxmox_kvm:
+        api_host: "{{ proxmox_api_host }}"
+        api_user: "{{ proxmox_user }}"
+        api_token_id: "{{ proxmox_token_id }}"
+        api_token_secret: "{{ proxmox_token_secret }}"
+        validate_certs: false
+        node: "{{ target_node }}"
+        vmid: "{{ vmid }}"
+        update: yes
+        ide:
+          ide2: "{{ iso_storage_pool }}:iso/{{ cyberark_iso_name }},media=cdrom"
+      delegate_to: localhost
+
+    - name: "Wait for Windows to recognize the CD-ROM"
+      ansible.windows.win_shell: |
+        $drive = Get-Volume | Where-Object { $_.DriveType -eq 'CD-ROM' -and $_.FileSystem -ne $null }
+        if ($drive) { Write-Output ($drive.DriveLetter + ":\") } else { exit 1 }
+      register: cdrom_mount
+      retries: 5
+      delay: 5
+      until: cdrom_mount.rc == 0
+      changed_when: false
+
+    - name: "Display the mounted drive path"
+      ansible.builtin.debug:
+        msg: "CyberArk Binaries successfully mounted at {{ cdrom_mount.stdout | trim }} on {{ inventory_hostname }}"
