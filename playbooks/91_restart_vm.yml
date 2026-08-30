@@ -1,0 +1,67 @@
+---
+- name: "Manage Proxmox VMs by Tag"
+  hosts: localhost
+  gather_facts: no
+  vars:
+    # -------------------------------------------------------------
+    # AVAILABLE TAGS:
+    # OS/Group:   CyberArk, Windows-2025, Rocky-9
+    # Components: domain-controllers, vaults, pvwa, cpm, psm, htmlgw, psmp, lb
+    # -------------------------------------------------------------
+
+    # Default values (Can be overridden from the command line)
+    target_tag: "CyberArk"
+    vm_state: "stopped"       # <--- Changed default to "stopped"
+
+    # List of your Proxmox nodes to search
+    pve_nodes:
+      - "proxmox02"
+      - "proxmox03"
+
+  tasks:
+    - name: "1. Fetch all VMs from all Proxmox nodes"
+      uri:
+        url: "https://{{ proxmox_api_host }}/api2/json/nodes/{{ item }}/qemu"
+        method: GET
+        headers:
+          Authorization: "PVEAPIToken={{ proxmox_user }}!{{ proxmox_token_id }}={{ proxmox_token_secret }}"
+        validate_certs: false
+      loop: "{{ pve_nodes }}"
+      register: all_vms_raw
+
+    - name: "2. Compile list of VMs matching tag: {{ target_tag }}"
+      set_fact:
+        matching_vms: >-
+          {{
+            matching_vms | default([]) +
+            item.json.data
+            | selectattr('tags', 'defined')
+            | selectattr('tags', 'search', target_tag)
+            | map('combine', {'pve_node': item.item})
+            | list
+          }}
+      loop: "{{ all_vms_raw.results }}"
+      loop_control:
+        label: "Scanning {{ item.item }}"
+
+    - name: "3. Verify matching VMs found"
+      debug:
+        msg: "Found {{ item.name }} (VMID: {{ item.vmid }}) on {{ item.pve_node }} with tags: {{ item.tags }}"
+      loop: "{{ matching_vms | default([]) }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+    - name: "4. Execute '{{ vm_state }}' on matching VMs"
+      community.proxmox.proxmox_kvm:
+        api_host: "{{ proxmox_api_host }}"
+        api_user: "{{ proxmox_user }}"
+        api_token_id: "{{ proxmox_token_id }}"
+        api_token_secret: "{{ proxmox_token_secret }}"
+        validate_certs: false
+        node: "{{ item.pve_node }}"
+        vmid: "{{ item.vmid }}"
+        state: "{{ vm_state }}"
+      loop: "{{ matching_vms | default([]) }}"
+      loop_control:
+        label: "{{ vm_state | capitalize }} {{ item.name }} (VMID: {{ item.vmid }})"
+      when: matching_vms is defined and matching_vms | length > 0

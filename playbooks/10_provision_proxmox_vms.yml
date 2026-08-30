@@ -4,8 +4,8 @@
   gather_facts: no
   serial: 2           # Critical: Process one VM at a time to save Storage I/O
   vars_files:
-    - ../inventory/group_vars/all.yml
-    - ../inventory/group_vars/vault.yml
+    - ../inventory/group_vars/all/all.yml
+    - ../inventory/group_vars/all/vault.yml
 
   roles:
     - role: proxmox_vm

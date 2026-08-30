@@ -1,0 +1,255 @@
+---
+# ==========================================================
+# PHASE 1: Proxmox VM Creation via SSH (Runs on Localhost)
+# ==========================================================
+- name: "Build Windows Server 2025 Golden Images (SSH Edition)"
+  hosts: localhost
+  gather_facts: no
+  vars_files:
+    - inventory/group_vars/all.yml
+  vars:
+    target_templates:
+      - node: "proxmox02.mgmt.cybermark.tech"
+        vmid: 9002
+        name: "win2025-template-02"
+        ip: "10.0.3.200"
+        iso_main: "local:iso/win2025_slipstreamed-9002.iso"
+      - node: "proxmox03.mgmt.cybermark.tech"
+        vmid: 9003
+        name: "win2025-template-03"
+        ip: "10.0.3.201"
+        iso_main: "local:iso/win2025_slipstreamed-9003.iso"
+
+    iso_virtio: "local:iso/virtio-win-0.1.271.iso"
+    ssh_cmd: "ssh -i ~/.ssh/id_proxmox_build -o StrictHostKeyChecking=accept-new"
+
+  tasks:
+    - name: "STEP 1A: Force stop existing VMs"
+      command: "{{ ssh_cmd }} root@{{ item.node }} 'qm stop {{ item.vmid }}'"
+      loop: "{{ target_templates }}"
+      ignore_errors: yes
+
+    - name: "STEP 1B: Remove existing VMs"
+      command: "{{ ssh_cmd }} root@{{ item.node }} 'qm destroy {{ item.vmid }} --destroy-unreferenced-disks 1'"
+      loop: "{{ target_templates }}"
+      ignore_errors: yes
+
+    - name: "STEP 2: Create VM Shell"
+      command: >
+        {{ ssh_cmd }} root@{{ item.node }}
+        "qm create {{ item.vmid }} --name {{ item.name }} --memory 4096 --cores 2 --cpu host --ostype win11 --scsihw virtio-scsi-pci --bios ovmf --machine q35 --agent 1"
+      loop: "{{ target_templates }}"
+
+    - name: "STEP 2.5: Configure Disks, CD-ROMs, and TPM"
+      command: >
+        {{ ssh_cmd }} root@{{ item.node }}
+        "qm set {{ item.vmid }}
+        --scsi0 {{ storage_id | default('vm') }}:60,cache=writeback,discard=on,ssd=1
+        --scsi1 {{ storage_id | default('vm') }}:60,cache=writeback,discard=on,ssd=1
+        --efidisk0 {{ storage_id | default('vm') }}:1,format=raw,efitype=4m,pre-enrolled-keys=1
+        --tpmstate0 {{ storage_id | default('vm') }}:1,version=v2.0
+        --sata0 {{ item.iso_main }},media=cdrom
+        --sata1 {{ iso_virtio }},media=cdrom
+        --net0 virtio,bridge={{ bridge | default('vmbr0') }},tag={{ vlan_id | default('30') }}
+        --boot 'order=scsi0;sata0'"
+      loop: "{{ target_templates }}"
+
+    - name: "STEP 2.7: Boot the VM"
+      command: "{{ ssh_cmd }} root@{{ item.node }} 'qm start {{ item.vmid }}'"
+      loop: "{{ target_templates }}"
+
+    - name: "STEP 2.8: Bypass 'Press any key' prompt"
+      command: "{{ ssh_cmd }} root@{{ item.node }} 'sleep 8; qm sendkey {{ item.vmid }} ret'"
+      loop: "{{ target_templates }}"
+
+    - name: "Wait for Windows to Install and open WinRM (Takes 10-15 mins)"
+      ansible.builtin.wait_for:
+        host: "{{ item.ip }}"
+        port: 5985
+        delay: 120
+        timeout: 1800
+      loop: "{{ target_templates }}"
+
+    - name: "Dynamically add new VMs to in-memory inventory for WinRM"
+      ansible.builtin.add_host:
+        name: "{{ item.ip }}"
+        groups: build_vms
+        ansible_user: "Administrator"
+        ansible_password: "{{ build_password }}"  # <--- FIXED PASSWORD VARIABLE
+        ansible_connection: "winrm"
+        ansible_winrm_server_cert_validation: "ignore"
+        ansible_port: 5985
+        ansible_winrm_transport: ntlm
+        target_node: "{{ item.node }}"
+        vmid: "{{ item.vmid }}"
+      loop: "{{ target_templates }}"
+
+# ==========================================================
+# PHASE 2: Windows Configuration via WinRM (Runs in Parallel)
+# ==========================================================
+- name: "Configure OS and Sysprep"
+  hosts: build_vms
+  gather_facts: no
+  tasks:
+    - name: "STEP 5.5A: Force gpsvc to timeout after 30 seconds"
+      ansible.windows.win_regedit:
+        path: HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon
+        name: GpNetworkStartTimeoutPolicyValue
+        data: 30
+        type: dword
+
+    - name: "STEP 5.5B: Disable synchronous Foreground Policy processing"
+      ansible.windows.win_regedit:
+        path: HKLM:\SOFTWARE\Policies\Microsoft\Windows\System
+        name: SyncForegroundPolicy
+        data: 0
+        type: dword
+
+    - name: "STEP 5.5C: Hardcode WinRM Firewall Rule (Prevents post-reboot lockout)"
+      ansible.windows.win_shell: Enable-NetFirewallRule -DisplayGroup 'Windows Remote Management'
+      
+    - name: "STEP 5.6: Initialize 60GB Data Disk as D: and Move CD-ROMs"
+      ansible.windows.win_shell:
+        cmd: |
+          # 1. Move CD-ROMs to late alphabet letters
+          $cdroms = Get-WmiObject -Class Win32_Volume -Filter "DriveType=5"
+          $letters = 'Z','Y','X','W'
+          $i = 0
+          foreach ($cd in $cdroms) {
+              if ($cd.DriveLetter -and $cd.DriveLetter -notmatch "[ZYXW]:") {
+                  $cd.DriveLetter = $letters[$i] + ":"
+                  $cd.Put() | Out-Null
+                  $i++
+              }
+          }
+          
+          Start-Sleep -Seconds 3
+          
+          # 2. Target the non-OS disk (Disk 1)
+          $dataDisk = Get-Disk | Where-Object Number -ne 0
+          
+          if ($dataDisk) {
+              # Ensure it is online and writable
+              Set-Disk -Number $dataDisk.Number -IsOffline $false -ErrorAction SilentlyContinue
+              Set-Disk -Number $dataDisk.Number -IsReadOnly $false -ErrorAction SilentlyContinue
+              
+              # Check if D: is already fully formatted so we don't wipe it on future runs
+              $dDrive = Get-Volume -DriveLetter D -ErrorAction SilentlyContinue
+              
+              if (-not $dDrive) {
+                  Write-Output "Wiping half-baked config and formatting as D:..."
+                  Clear-Disk -Number $dataDisk.Number -RemoveData -Confirm:$false
+                  Initialize-Disk -Number $dataDisk.Number -PartitionStyle GPT
+                  New-Partition -DiskNumber $dataDisk.Number -DriveLetter D -UseMaximumSize | Format-Volume -FileSystem NTFS -NewFileSystemLabel "Data" -Confirm:$false
+              } else {
+                  Write-Output "Drive D: is already formatted and mounted."
+              }
+          }
+
+    - name: "STEP 6: Install Windows Updates"
+      ansible.windows.win_updates:
+        category_names: ['CriticalUpdates', 'SecurityUpdates']
+        reboot: yes
+        reboot_timeout: 3600
+
+    - name: "STEP 7: Prepare SetupComplete & Sysprep XML"
+      ansible.windows.win_file:
+        path: C:\Windows\Setup\Scripts
+        state: directory
+
+    - name: "Drop SetupComplete.cmd"
+      ansible.windows.win_copy:
+        dest: C:\Windows\Setup\Scripts\SetupComplete.cmd
+        content: |
+          @echo off
+          call winrm quickconfig -q
+          call winrm set winrm/config/winrs @{MaxMemoryPerShellMB="1024"}
+          call winrm set winrm/config @{MaxTimeoutms="1800000"}
+          call winrm set winrm/config/service/auth @{Basic="true"}
+          powershell.exe -ExecutionPolicy Bypass -Command "Get-NetConnectionProfile | Set-NetConnectionProfile -NetworkCategory Private"
+          powershell.exe -ExecutionPolicy Bypass -Command "Enable-NetFirewallRule -DisplayGroup 'Windows Remote Management'"
+
+    - name: "Drop Final unattend.xml for Sysprep"
+      ansible.windows.win_copy:
+        src: files/unattend.xml
+        dest: C:\Windows\System32\Sysprep\unattend.xml
+
+    - name: "Download Cloudbase-Init (Latest Stable)"
+      ansible.windows.win_get_url:
+        url: "https://www.cloudbase.it/downloads/CloudbaseInitSetup_Stable_x64.msi"
+        dest: "C:\\CloudbaseInitSetup_Stable_x64.msi"
+
+    - name: "Install Cloudbase-Init"
+      ansible.windows.win_package:
+        path: "C:\\CloudbaseInitSetup_Stable_x64.msi"
+        arguments: '/qn /norestart'
+        state: present
+
+    - name: "Drop Cloudbase-Init Config"
+      ansible.windows.win_copy:
+        src: files/cloudbase-init.conf
+        dest: "C:\\Program Files\\Cloudbase Solutions\\Cloudbase-Init\\conf\\cloudbase-init.conf"
+
+    - name: "Arm Cloudbase-Init for the Clone Boot (The Correct Way)"
+      ansible.windows.win_shell: |
+        # 1. Stop the service cleanly
+        Stop-Service -Name cloudbase-init -Force -ErrorAction SilentlyContinue
+        
+        # 2. Clear the LocalData state folder so it thinks it is a fresh deployment
+        $localData = "C:\Program Files\Cloudbase Solutions\Cloudbase-Init\LocalData"
+        if (Test-Path $localData) {
+            Remove-Item "$localData\*" -Recurse -Force -ErrorAction SilentlyContinue
+        }
+        
+        # 3. Clear any old logs from the template build
+        $logFile = "C:\Program Files\Cloudbase Solutions\Cloudbase-Init\log\cloudbase-init.log"
+        if (Test-Path $logFile) {
+            Remove-Item $logFile -Force -ErrorAction SilentlyContinue
+        }
+        
+        # 4. Guarantee it starts on the next boot
+        Set-Service -Name cloudbase-init -StartupType Automatic
+        
+        exit 0
+
+    - name: "STEP 9: Sysprep & Power Off"
+      ansible.windows.win_shell: "C:\\Windows\\System32\\Sysprep\\sysprep.exe /generalize /oobe /shutdown /unattend:C:\\Windows\\System32\\Sysprep\\unattend.xml"
+      async: 600
+      poll: 0
+
+# ==========================================================
+# PHASE 3: Convert to Template via SSH
+# ==========================================================
+- name: "Convert VMs to Templates"
+  hosts: localhost
+  gather_facts: no
+  vars_files:
+    - inventory/group_vars/all.yml
+  vars:
+    ssh_cmd: "ssh -i ~/.ssh/id_proxmox_build -o StrictHostKeyChecking=accept-new"
+  tasks:
+    - name: "Wait for VMs to power off via SSH"
+      command: "{{ ssh_cmd }} root@{{ hostvars[item]['target_node'] }} 'qm status {{ hostvars[item]['vmid'] }}'"
+      register: vm_status_ssh
+      until: "'status: stopped' in vm_status_ssh.stdout"
+      retries: 40
+      delay: 15
+      loop: "{{ groups['build_vms'] }}"
+
+    - name: "Remove CD-ROMs before templating"
+      command: "{{ ssh_cmd }} root@{{ hostvars[item]['target_node'] }} 'qm set {{ hostvars[item]['vmid'] }} --delete sata0,sata1'"
+      loop: "{{ groups['build_vms'] }}"
+
+    - name: "STEP 10: Inject Cloud-Init Drive and Default Configurations"
+      command: >
+        {{ ssh_cmd }} root@{{ hostvars[item]['target_node'] }} 
+        "qm set {{ hostvars[item]['vmid'] }} 
+        --ide2 {{ storage_id | default('vm') }}:cloudinit 
+        --citype nocloud 
+        --ciuser Administrator 
+        --ipconfig0 ip=dhcp"
+      loop: "{{ groups['build_vms'] }}"
+
+    - name: "Convert VMs to Templates via SSH"
+      command: "{{ ssh_cmd }} root@{{ hostvars[item]['target_node'] }} 'qm template {{ hostvars[item]['vmid'] }}'"
+      loop: "{{ groups['build_vms'] }}"

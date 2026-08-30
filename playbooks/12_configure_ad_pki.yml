@@ -1,0 +1,85 @@
+---
+# ==============================================================================
+# PLAY 1: INFRASTRUCTURE CHECK
+# ==============================================================================
+- name: "Pre-Check: Ensure DCs are Online"
+  hosts: localhost
+  gather_facts: no
+  vars:
+    target_dcs:
+      - dc-01
+      - dc-02
+  tasks:
+    - name: "Start Domain Controllers"
+      community.proxmox.proxmox_kvm:
+        api_host: "{{ hostvars[item]['proxmox_api_host'] | default('proxmox01.int.cybermark.tech') }}"
+        api_user: "{{ hostvars[item]['proxmox_user'] | default('root@pam') }}"
+        api_token_id: "{{ hostvars[item]['proxmox_token_id'] }}"
+        api_token_secret: "{{ hostvars[item]['proxmox_token_secret'] }}"
+        node: "{{ hostvars[item]['target_node'] | default('pve1') }}"
+        vmid: "{{ hostvars[item]['vmid'] }}"
+        state: started
+      loop: "{{ target_dcs }}"
+      ignore_errors: yes
+
+    - name: "Wait for WinRM Port"
+      ansible.builtin.wait_for:
+        host: "{{ hostvars[item]['ansible_host'] }}"
+        port: 5985
+        state: started
+        timeout: 600
+        delay: 10
+      loop: "{{ target_dcs }}"
+
+# ==============================================================================
+# PLAY 2: DOMAIN CONTROLLER INSTALLATION (Primary & Secondary)
+# ==============================================================================
+- name: "Install & Configure Domain Controllers"
+  hosts: dc-01, dc-02
+  gather_facts: yes
+  roles:
+    # Your role 'domain_controller' handles the 'when: inventory_hostname ==' logic
+    - role: domain_controller
+
+# ==============================================================================
+# PLAY 2.5: PASSWORD SYNCHRONIZATION (Race Condition Fix)
+# ==============================================================================
+#- name: "Force Sync Domain Admin Password"
+#  hosts: dc-01
+#  gather_facts: no
+#  vars_files:
+#    - ../inventory/group_vars/all.yml
+#  tasks:
+#    - name: "Reset Domain Administrator Password in AD Database"
+#      ansible.windows.win_shell: 'net user Administrator "{{ vault_lab_password }}" /domain'
+#      register: password_sync
+#      changed_when: "'The command completed successfully' in password_sync.stdout"
+#
+
+# ==============================================================================
+# PLAY 3: DHCP FAILOVER
+# ==============================================================================
+- name: "Configure DHCP Failover"
+  hosts: dc-01
+  gather_facts: yes
+  vars:
+    # Pass variables to the role
+    dhcp_scope_id: "10.0.3.0"
+    dhcp_secondary_dc: "dc-02"
+  roles:
+    - role: dhcp_failover
+
+# ==============================================================================
+# PLAY 4: PKI & CORPORATE STRUCTURE
+# ==============================================================================
+- name: "Deploy PKI and AD Structure"
+  hosts: dc-01
+  gather_facts: yes
+  roles:
+    - role: pki
+    - role: ad_structure
+
+# ==============================================================================
+# PLAY 5: FINAL VALIDATION
+# ==============================================================================
+- import_playbook: 90_validate_lab.yml

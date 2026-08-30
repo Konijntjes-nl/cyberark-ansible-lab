@@ -16,6 +16,7 @@ dns_servers: "10.0.3.1 10.0.3.2"
 # --- Secrets / Passwords ---
 # Note: Ensure these are defined in your encrypted vault.yml
 lab_password: "{{ vault_lab_password }}"
+build_password: "{{vault_build_password }}"
 #vault_ansible_password: "{{ vault_ansible_password }}"
 
 # --- Domain Settings ---

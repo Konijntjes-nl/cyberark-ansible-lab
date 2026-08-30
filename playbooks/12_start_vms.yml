@@ -1,0 +1,45 @@
+---
+- name: "Start All Lab VMs Across Proxmox Cluster"
+  hosts: proxmox_nodes
+  gather_facts: no
+  vars:
+    # List of all VM IDs from your inventory
+    vms_to_start:
+      - 300 # dc-01
+      - 301 # dc-02
+      - 302 # vault-01
+      - 303 # vault-02
+      - 304 # pvwa-01
+      - 305 # pvwa-02
+      - 306 # cpm-01
+      - 307 # cpm-02
+      - 308 # psm-01
+      - 309 # psm-02
+      - 310 # htmlgw-01
+      - 311 # htmlgw-02
+      - 312 # psmp-01
+      - 313 # psmp-02
+      - 314 # lb-01
+      - 315 # lb-02
+
+  tasks:
+    - name: "Ensure all lab virtual machines are running"
+      ansible.builtin.shell: |
+        for vmid in {{ vms_to_start | join(' ') }}; do
+          # Check if the VM exists on this specific Proxmox node
+          if qm status $vmid &>/dev/null; then
+            status=$(qm status $vmid | awk '{print $2}')
+            if [ "$status" = "stopped" ]; then
+              echo "Starting VM $vmid..."
+              qm start $vmid
+            else
+              echo "VM $vmid is already running."
+            fi
+          fi
+        done
+      register: vm_start_output
+      changed_when: "'Starting VM' in vm_start_output.stdout"
+
+    - name: "Display Startup Actions"
+      ansible.builtin.debug:
+        msg: "{{ vm_start_output.stdout_lines }}"

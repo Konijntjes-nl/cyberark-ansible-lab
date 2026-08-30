@@ -12,22 +12,50 @@ The lab provisions the following infrastructure:
 * **Proxy Components:** PSMP, HTML5 Gateway (Linux, Domain Joined)
 * **Network:** Internal segmented lab network (10.0.3.0/24)
 
+## Setting Up the Ansible Control Node
+
+If you are starting with a clean Linux installation, follow these steps to prepare your machine to run this project.
+
+### 1. Install Ansible and Git
+**For Ubuntu/Debian:**
+```bash
+sudo apt update
+sudo apt install -y git ansible sshpass
+```
+
+**For AlmaLinux/RHEL:**
+```bash
+sudo dnf install -y epel-release
+sudo dnf install -y git ansible-core sshpass
+```
+
+### 2. Clone the Repository
+```bash
+git clone <your-repository-url>
+cd cyberark-ansible-lab
+```
+
+### 3. Configure the Ansible Vault
+This repository relies on encrypted variables for domain configuration and passwords. You must create a local password file so Ansible can decrypt them automatically. 
+
+```bash
+# Create the password file (this is ignored by Git)
+echo "your_secure_vault_password" > .vault_pass.txt
+```
+
+### 4. Install Collection Dependencies
+Download the required Ansible modules for Proxmox and Windows AD management:
+```bash
+ansible-galaxy collection install -r requirements.yml
+```
+
 ## Prerequisites
 
-1. **Ansible Collections:**
-   Ensure all required collections are installed via `requirements.yml`:
-   ```bash
-   ansible-galaxy collection install -r requirements.yml
-   ```
-   *(Required: `community.proxmox`, `ansible.windows`, `microsoft.ad`, `community.general`)*
-
-2. **Ansible Vault Configuration:**
-   This lab utilizes encrypted variables for domain configuration and passwords. Ensure you have a `.vault_pass.txt` file in the root directory containing the vault password. The `ansible.cfg` is configured to read this automatically:
-   `vault_password_file = .vault_pass.txt`
-
-3. **Proxmox ISO Staging (CyberArk Binaries):**
+1. **Proxmox ISO Staging (CyberArk Binaries):**
    Before running the `20_deploy_files.yml` playbook, you must package all CyberArk installation binaries (`.zip` files) into a single ISO file named `CyberArk_PAS_Installers.iso`. Upload this ISO to the `local` storage pool on your Proxmox host.
 
+2. **KMS Activation Routing:**
+   The Windows Server instances use MAS online KMS activation. The provisioning playbook will temporarily switch the VM's DNS to the gateway (`10.0.3.254`) to reach the activation servers before reverting back to the internal Domain Controllers (`10.0.3.1`, `10.0.3.2`). Ensure the gateway has outbound internet access during provisioning.
 
 ## Repository Structure
 
@@ -63,7 +91,7 @@ Execute the playbooks in the following sequence to build the environment from sc
 
 ## Quick Start
 
-To begin a fresh deployment after fulfilling the prerequisites:
+To begin a fresh deployment after completing the control node setup and prerequisites:
 
 ```bash
 # 1. Provision the virtual machines

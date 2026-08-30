@@ -96,6 +96,32 @@
   pause:
     seconds: 10
 
+- name: "Configure Hardware"
+  community.proxmox.proxmox_kvm:
+    api_host: "{{ proxmox_api_host }}"
+    api_user: "{{ proxmox_user }}"
+    api_token_id: "{{ proxmox_token_id }}"
+    api_token_secret: "{{ proxmox_token_secret }}"
+    validate_certs: false
+    node: "{{ target_node }}"
+    vmid: "{{ vmid }}"
+    state: present
+    update: yes
+    memory: 4096
+    cores: 2
+    net:
+      net0: "virtio={{ mac }},bridge={{ bridge }},tag={{ vlan_id }}"
+  delegate_to: localhost
+
+- name: "Force Network Adapter Config (MAC, Bridge, VLAN)"
+  shell: "qm set {{ vmid }} --net0 virtio={{ mac }},bridge={{ bridge }},tag={{ vlan_id }}"
+  delegate_to: "{{ target_node }}"
+  vars:
+    ansible_user: "root"
+    target_physical_node: "{{ hostvars[inventory_hostname]['target_node'] }}"
+    ansible_password: "{{ hostvars[target_physical_node]['ansible_password'] }}"
+    ansible_ssh_common_args: '-o StrictHostKeyChecking=no'
+
 - name: "Ensure Snippets Directory Exists on Proxmox Node"
   file:
     path: "/var/lib/vz/snippets"
@@ -106,6 +132,7 @@
     target_physical_node: "{{ hostvars[inventory_hostname]['target_node'] }}"
     ansible_password: "{{ hostvars[target_physical_node]['ansible_password'] }}"
     ansible_ssh_common_args: '-o StrictHostKeyChecking=no'
+  when: ostype in ['win10', 'win2019', 'win2025']
 
 - name: "Drop Windows Plain-text Password Snippet"
   copy:
@@ -125,16 +152,17 @@
       runcmd:
         - powershell.exe -ExecutionPolicy Bypass -Command "Get-NetConnectionProfile | Set-NetConnectionProfile -NetworkCategory Private"
         - cmd.exe /c netsh advfirewall firewall set rule group="Remote Desktop" new enable=Yes
+        - powershell.exe -ExecutionPolicy Bypass -Command "$cd = Get-WmiObject -Class Win32_Volume -Filter 'DriveType=5'; if ($cd.DriveLetter) { $cd.DriveLetter='Z:'; $cd.Put() | Out-Null }; Start-Sleep -Seconds 2; $dsk = Get-Disk | Where-Object Number -ne 0; if ($dsk) { Set-Disk -Number $dsk.Number -IsOffline $false; Set-Disk -Number $dsk.Number -IsReadOnly $false; Start-Sleep -Seconds 2; Get-Partition -DiskNumber $dsk.Number | Where-Object Size -gt 1GB | Set-Partition -NewDriveLetter D }"
   delegate_to: "{{ target_node }}"
   vars:
     ansible_user: "root"
     target_physical_node: "{{ hostvars[inventory_hostname]['target_node'] }}"
     ansible_password: "{{ hostvars[target_physical_node]['ansible_password'] }}"
     ansible_ssh_common_args: '-o StrictHostKeyChecking=no'
+  when: ostype in ['win10', 'win2019', 'win2025']
 
-- name: "Setup Cloud-Init (LVM Native)"
+- name: "Setup Cloud-Init (Windows - LVM Native)"
   shell: |
-    # Use cicustom to bypass Proxmox SHA-512 hashing for Windows
     qm set {{ vmid }} \
       --ipconfig0 ip={{ ip }}/24,gw={{ gateway }} \
       --nameserver '{{ dns_servers | replace(" ", ",") }}' \
@@ -145,22 +173,31 @@
     target_physical_node: "{{ hostvars[inventory_hostname]['target_node'] }}"
     ansible_password: "{{ hostvars[target_physical_node]['ansible_password'] }}"
     ansible_ssh_common_args: '-o StrictHostKeyChecking=no'
+  when: ostype in ['win10', 'win2019', 'win2025']
 
-- name: "Configure Hardware"
-  community.proxmox.proxmox_kvm:
-    api_host: "{{ proxmox_api_host }}"
-    api_user: "{{ proxmox_user }}"
-    api_token_id: "{{ proxmox_token_id }}"
-    api_token_secret: "{{ proxmox_token_secret }}"
-    validate_certs: false
-    node: "{{ target_node }}"
-    vmid: "{{ vmid }}"
-    state: present
-    memory: 4096
-    cores: 2
-    net:
-      net0: "virtio={{ mac }},bridge={{ bridge }},tag={{ vlan_id }}"
-  delegate_to: localhost
+- name: "Setup Cloud-Init (Linux Native)"
+  shell: |
+    # Clear any inherited snippets
+    qm set {{ vmid }} --delete cicustom 2>/dev/null || true
+
+    # Apply standard Linux Cloud-Init configuration including Gateway and DNS
+    qm set {{ vmid }} \
+      --name "{{ inventory_hostname }}" \
+      --ipconfig0 ip={{ ip }}/24,gw={{ gateway }} \
+      --nameserver "{{ dns_servers }}" \
+      --ciuser "mgmt" \
+      --cipassword "{{ vault_lab_password | default(lab_password) }}" \
+      --sshkeys /root/id_servers.pub
+
+    # FORCE Proxmox to generate the Cloud-Init ISO right now
+    qm cloudinit update {{ vmid }}
+  delegate_to: "{{ target_node }}"
+  vars:
+    ansible_user: "root"
+    target_physical_node: "{{ hostvars[inventory_hostname]['target_node'] }}"
+    ansible_password: "{{ hostvars[target_physical_node]['ansible_password'] }}"
+    ansible_ssh_common_args: '-o StrictHostKeyChecking=no'
+  when: ostype not in ['win10', 'win2019', 'win2025']
 
 - name: "Start VM"
   community.proxmox.proxmox_kvm:
@@ -224,7 +261,7 @@
   ansible.windows.win_copy:
     src: "MAS_AIO.cmd"
     dest: "C:\\MAS_AIO.cmd"
-  when: ostype == 'win10' or ostype == 'win2025' # Adjust for your specific OS tags
+  when: ostype == 'win10' or ostype == 'win2025'
 
 - name: "Activation: Revert DNS to Domain Controllers"
   ansible.windows.win_shell: |
@@ -247,10 +284,9 @@
 
 - name: "Activation: Cleanup CloudBase-Init"
   ansible.windows.win_file:
-    path: "C:\\CloudBaseInitSetup_Stable_x64"
+    path: "C:\\CloudBaseInitSetup_Stable_x64.msi"
     state: absent
   when: ostype == 'win10' or ostype == 'win2019'
-
 
 - name: "Shutdown VM for Snapshot"
   community.proxmox.proxmox_kvm:

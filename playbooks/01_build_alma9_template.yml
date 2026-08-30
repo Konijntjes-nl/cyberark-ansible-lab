@@ -5,22 +5,22 @@
   vars_files:
     - ../inventory/group_vars/all.yml
   vars:
-    cloud_image_url: "https://repo.almalinux.org/almalinux/9/cloud/x86_64/images/AlmaLinux-9-GenericCloud-latest.x86_64.qcow2"
-    image_tmp: "/tmp/alma9-hardened.qcow2"
+    cloud_image_url: "http://mirror.colocenter.nl/rocky/9/images/x86_64/Rocky-9-GenericCloud-Base.latest.x86_64.qcow2"
+    image_tmp: "/tmp/rocky9-hardened.qcow2"
     images_path: "/var/lib/vz/images"
     disk_size: "40G"
-    
-  target_templates:
+
+    target_templates:
       - target_node: "proxmox02"
         vmid: 9102
-        name: "linux-hardened-alma-9"
+        name: "rocky-9"
       - target_node: "proxmox03"
         vmid: 9103
-        name: "linux-hardened-alma-9"
+        name: "rocky-9"
 
   tasks:
     # --- 1. DOWNLOAD & HARDEN ---
-    - name: "1. Download AlmaLinux 10"
+    - name: "1. Download Rocky Linux 9"
       ansible.builtin.get_url:
         url: "{{ cloud_image_url }}"
         dest: "{{ image_tmp }}"
@@ -28,28 +28,28 @@
     - name: "2. Harden Image via virt-customize"
       ansible.builtin.shell: |
         virt-customize -a "{{ image_tmp }}" \
-          --install "epel-release,cloud-init,cloud-utils-growpart,qemu-guest-agent,openssh-server,sudo,firewalld,audit,dnf-automatic,fail2ban,cockpit" \
-          --run-command 'systemctl enable qemu-guest-agent sshd firewalld auditd fail2ban cockpit.socket' \
-          --run-command 'sed -i "s/apply_updates = no/apply_updates = yes/" /etc/dnf/automatic.conf' \
-          --run-command 'systemctl enable dnf-automatic.timer' \
-          --run-command 'firewall-offline-cmd --set-default-zone=drop' \
-          --run-command 'firewall-offline-cmd --zone=drop --add-service=ssh' \
-          --run-command 'firewall-offline-cmd --zone=drop --add-service=cockpit' \
-          --run-command 'echo "PasswordAuthentication no" > /etc/ssh/sshd_config.d/99-disable-passwords.conf' \
-          --run-command 'echo "PermitRootLogin no" >> /etc/ssh/sshd_config.d/99-disable-passwords.conf' \
+          --install "cloud-init,cloud-utils-growpart,qemu-guest-agent,openssh-server,sudo" \
+          --run-command 'systemctl enable qemu-guest-agent sshd' \
           --run-command 'truncate -s 0 /etc/machine-id' \
           --run-command 'rm -f /var/lib/dbus/machine-id' \
           --run-command 'ln -s /etc/machine-id /var/lib/dbus/machine-id || true' \
           --run-command 'rm -f /etc/ssh/ssh_host_*' \
           --run-command 'dnf clean all' \
-          --run-command 'touch /.autorelabel'
-      delegate_to: localhost # Ensure libguestfs-tools is installed on your controller
+          --selinux-relabel
+      delegate_to: localhost
 
     - name: "3. Resize Disk"
       ansible.builtin.command: "qemu-img resize {{ image_tmp }} {{ disk_size }}"
 
     # --- 2. DEPLOY & TEMPLATE ---
-    - name: "4. Create VM Shell"
+    - name: "4. Clean up existing template/VM"
+      ansible.builtin.shell: |
+        qm stop {{ item.vmid }} 2>/dev/null || true
+        qm destroy {{ item.vmid }} --purge 2>/dev/null || true
+      delegate_to: "{{ item.target_node }}"
+      loop: "{{ target_templates }}"
+
+    - name: "5. Create VM Shell"
       community.proxmox.proxmox_kvm:
         api_host: "{{ proxmox_api_host }}"
         api_user: "{{ proxmox_user }}"
@@ -60,22 +60,30 @@
         name: "{{ item.name }}"
         memory: 2048
         cores: 2
+        cpu: "x86-64-v3"
         agent: 1
         net:
           net0: "virtio,bridge={{ bridge | default('vmbr0') }},firewall=1"
         state: present
       loop: "{{ target_templates }}"
 
-    - name: "5. Import Disk & Seal"
+    - name: "6 Transfer Hardened Image to Proxmox Nodes"
+      ansible.builtin.copy:
+        src: "{{ image_tmp }}"
+        dest: "{{ image_tmp }}"
+      delegate_to: "{{ item.target_node }}"
+      loop: "{{ target_templates }}"
+
+    - name: "7. Import Disk & Seal"
       ansible.builtin.shell: |
-        qm set {{ item.vmid }} --virtio0 "{{ storage_id | default('vm') }}:0,import-from={{ image_tmp }},discard=on"
-        qm set {{ item.vmid }} --ide2 "{{ storage_id | default('vm') }}:cloudinit"
+        qm set {{ item.vmid }} --virtio0 "{{ storage_id | default('local-lvm') }}:0,import-from={{ image_tmp }},discard=on"
+        qm set {{ item.vmid }} --ide2 "{{ storage_id | default('local-lvm') }}:cloudinit"
         qm set {{ item.vmid }} --boot order=virtio0
         qm set {{ item.vmid }} --ciuser "{{ ci_user | default('mgmt') }}" --cipassword "{{ vault_lab_password }}" --sshkeys ~/.ssh/id_rsa.pub
         qm template {{ item.vmid }}
       delegate_to: "{{ item.target_node }}"
       loop: "{{ target_templates }}"
-      vars:
-        ansible_user: "root"
-        ansible_password: "{{ hostvars[item.target_node]['ansible_password'] }}"
-        ansible_ssh_common_args: '-o StrictHostKeyChecking=no'
+#      vars:
+#        ansible_user: "root"
+#        ansible_password: "{{ hostvars[item.target_node]['ansible_password'] }}"
+#        ansible_ssh_common_args: '-o StrictHostKeyChecking=no'
