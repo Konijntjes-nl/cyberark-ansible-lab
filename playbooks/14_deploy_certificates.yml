@@ -61,11 +61,31 @@
           $CaConfig = "$($env:COMPUTERNAME)\$CaName"
           
           $Certificates = @(
-              @{ Name="PVWA"; Subject="CN=pvwa.{{ domain }}"; SANs=@("pvwa.{{ domain }}", "pvwa01.{{ domain }}", "pvwa02.{{ domain }}") },
-              @{ Name="PSM"; Subject="CN=psm.{{ domain }}"; SANs=@("psm.{{ domain }}", "psm01.{{ domain }}", "psm02.{{ domain }}") },
-              @{ Name="Vault"; Subject="CN=vault.{{ domain }}"; SANs=@("vault.{{ domain }}", "vault01.{{ domain }}", "vault02.{{ domain }}") },
-              @{ Name="HTML5GW"; Subject="CN=html5gw.{{ domain }}"; SANs=@("html5gw.{{ domain }}", "html5gw01.{{ domain }}", "html5gw02.{{ domain }}") },
-              @{ Name="LB"; Subject="CN=lb.{{ domain }}"; SANs=@("lb.{{ domain }}", "lb01.{{ domain }}", "lb02.{{ domain }}") }
+              @{ 
+                  Name="PVWA"
+                  Subject="CN=pvwa.{{ domain }}"
+                  SANs=@("pvwa.{{ domain }}", "pvwa-01.{{ domain }}", "pvwa-02.{{ domain }}", "pvwa", "pvwa-01", "pvwa-02") 
+              },
+              @{ 
+                  Name="PSM"
+                  Subject="CN=psm.{{ domain }}"
+                  SANs=@("psm.{{ domain }}", "psm-01.{{ domain }}", "psm-02.{{ domain }}", "psm", "psm-01", "psm-02") 
+              },
+              @{ 
+                  Name="Vault"
+                  Subject="CN=vault.{{ domain }}"
+                  SANs=@("vault.{{ domain }}", "vault-01.{{ domain }}", "vault-02.{{ domain }}", "vault", "vault-01", "vault-02") 
+              },
+              @{ 
+                  Name="HTML5GW"
+                  Subject="CN=htmlgw.{{ domain }}"
+                  SANs=@("htmlgw.{{ domain }}", "htmlgw-01.{{ domain }}", "htmlgw-02.{{ domain }}", "htmlgw", "htmlgw-01", "htmlgw-02") 
+              },
+              @{ 
+                  Name="LB"
+                  Subject="CN=lb.{{ domain }}"
+                  SANs=@("lb.{{ domain }}", "lb-01.{{ domain }}", "lb-02.{{ domain }}", "lb", "lb-01", "lb-02") 
+              }
           )
           
           foreach ($cert in $Certificates) {
@@ -146,7 +166,7 @@
       ansible.windows.win_copy:
         dest: "D:\\certs\\1_Bind_PVWA_IIS.ps1"
         content: |
-          $Password = ConvertTo-SecureString -String '1234qa!@!' -Force -AsPlainText
+          $Password = ConvertTo-SecureString -String '{{ lab_password }}' -Force -AsPlainText
           $Cert = Import-PfxCertificate -FilePath "D:\certs\PVWA.pfx" -CertStoreLocation Cert:\LocalMachine\My -Password $Password
           Import-Certificate -FilePath "D:\certs\RootCA.cer" -CertStoreLocation Cert:\LocalMachine\Root | Out-Null
           
@@ -161,6 +181,32 @@
           $CertPath = "Cert:\LocalMachine\My\$Thumbprint"
           Get-Item $CertPath | New-Item -Path "IIS:\SslBindings\*!443" -ErrorAction SilentlyContinue
           Write-Host "Done! IIS Bound to new certificate."
+
+# ======================================================================
+# PLAY 2.5: Stage Certificates on CPM Nodes
+# ======================================================================
+- name: "Stage Certificates to CPM"
+  hosts: cpm
+  gather_facts: no
+  vars:
+    local_cert_dir: "/opt/certs"
+  tasks:
+    - name: "Ensure D:\\certs Directory Exists"
+      ansible.windows.win_file:
+        path: "D:\\certs"
+        state: directory
+
+    - name: "Push Root CA to CPM D:\\certs"
+      ansible.windows.win_copy:
+        src: "{{ local_cert_dir }}/RootCA.cer"
+        dest: "D:\\certs\\RootCA.cer"
+
+    - name: "Drop CPM Trust Helper Script"
+      ansible.windows.win_copy:
+        dest: "D:\\certs\\1_Trust_Root_CA.ps1"
+        content: |
+          Import-Certificate -FilePath "D:\certs\RootCA.cer" -CertStoreLocation Cert:\LocalMachine\Root | Out-Null
+          Write-Host "Done! CPM now trusts the lab Certificate Authority."
 
 # ======================================================================
 # PLAY 3: Stage Certificates on PSM Nodes
@@ -188,7 +234,7 @@
       ansible.windows.win_copy:
         dest: "D:\\certs\\1_Bind_PSM_RDS.ps1"
         content: |
-          $Password = ConvertTo-SecureString -String '1234qa!@!' -Force -AsPlainText
+          $Password = ConvertTo-SecureString -String '{{ lab_password }}' -Force -AsPlainText
           $Cert = Import-PfxCertificate -FilePath "D:\certs\PSM.pfx" -CertStoreLocation Cert:\LocalMachine\My -Password $Password
           Import-Certificate -FilePath "D:\certs\RootCA.cer" -CertStoreLocation Cert:\LocalMachine\Root | Out-Null
           
@@ -224,13 +270,33 @@
         - RootCA.cer
         - Vault.pfx
 
+    - name: "Drop Vault TLS Binding Helper Script"
+      ansible.windows.win_copy:
+        dest: "D:\\certs\\1_Bind_Vault_TLS.ps1"
+        content: |
+          $Password = ConvertTo-SecureString -String '{{ lab_password }}' -Force -AsPlainText
+          Import-PfxCertificate -FilePath "D:\certs\Vault.pfx" -CertStoreLocation Cert:\LocalMachine\My -Password $Password | Out-Null
+          Import-Certificate -FilePath "D:\certs\RootCA.cer" -CertStoreLocation Cert:\LocalMachine\Root | Out-Null
+          
+          $CACertPath = "C:\Program Files (x86)\PrivateArk\Server\CACert.exe"
+          if (Test-Path $CACertPath) {
+              Write-Host "Vault installed. Attempting to bind certificate via CACert utility..."
+              Start-Process -FilePath $CACertPath -ArgumentList "set server /process" -Wait -NoNewWindow
+              Restart-Service "PrivateArk Server" -Force -ErrorAction SilentlyContinue
+              Restart-Service "CyberArk Logic Container" -Force -ErrorAction SilentlyContinue
+              Write-Host "Done! Vault TLS bound and services restarted."
+          } else {
+              Write-Warning "Certificates imported to Windows Store, but Vault is not installed yet."
+              Write-Warning "Run 'CACert.exe set server /process' manually after installing the Vault."
+          }
+
 # ======================================================================
 # PLAY 5: Stage Certificates on HTML5 Gateway Nodes (Linux / Podman)
 # ======================================================================
 - name: "Stage Certificates to HTML5GW"
-  hosts: htmlgw*  # <--- Changed from html5gw* to match your inventory
+  hosts: htmlgw*
   gather_facts: no
-  become: yes  # <--- Add this line
+  become: yes
   vars:
     local_cert_dir: "/opt/certs"
   tasks:
@@ -248,6 +314,7 @@
       loop:
         - RootCA.pem
         - HTML5GW.pfx
+        - PVWA.pfx
 
     - name: "Drop Podman PEM Conversion Script"
       ansible.builtin.copy:
@@ -258,12 +325,19 @@
           cd /opt/certs
           echo "Extracting Key and Certificate for Podman HTML5 container..."
           
-          # Extract unencrypted private key and certificate
-          openssl pkcs12 -in HTML5GW.pfx -nocerts -out html5gw.key -nodes -passin pass:1234qa!@!
-          openssl pkcs12 -in HTML5GW.pfx -clcerts -nokeys -out html5gw.crt -passin pass:1234qa!@!
-          chmod 600 html5gw.key html5gw.crt
+          # Gateway Cert & Key
+          openssl pkcs12 -in HTML5GW.pfx -nocerts -out html5gw.key -nodes -passin pass:{{ lab_password }}
+          openssl pkcs12 -in HTML5GW.pfx -clcerts -nokeys -out html5gw.crt -passin pass:{{ lab_password }}
           
-          echo "Done. Mount /opt/certs/html5gw.crt and /opt/certs/html5gw.key into your Podman container volumes."
+          # PVWA Cert for JWT validation
+          openssl pkcs12 -in PVWA.pfx -clcerts -nokeys -out pvwa.crt -passin pass:{{ lab_password }}
+          
+          chmod 600 html5gw.key html5gw.crt pvwa.crt RootCA.pem
+          
+          echo "Done."
+          echo "CRITICAL for Guacamole: You MUST mount these into the container:"
+          echo "  -v /opt/certs/RootCA.pem:/etc/pki/ca-trust/source/anchors/RootCA.pem"
+          echo "  -v /opt/certs/pvwa.crt:/etc/opt/CARKpsmgw/certs/pvwa.crt"
 
 # ======================================================================
 # PLAY 6: Stage Certificates on Load Balancer Nodes (Linux / HAProxy)
@@ -271,7 +345,7 @@
 - name: "Stage Certificates to Load Balancers"
   hosts: lb*
   gather_facts: no
-  become: yes  # <--- Add this line
+  become: yes
   vars:
     local_cert_dir: "/opt/certs"
   tasks:
@@ -289,6 +363,9 @@
       loop:
         - RootCA.pem
         - LB.pfx
+        - PVWA.pfx
+        - PSM.pfx
+        - HTML5GW.pfx
 
     - name: "Drop HAProxy PEM Conversion Script"
       ansible.builtin.copy:
@@ -299,12 +376,17 @@
           cd /opt/certs
           echo "Extracting and combining certificates for HAProxy..."
           
-          # Extract unencrypted private key and certificate
-          openssl pkcs12 -in LB.pfx -nocerts -out lb.key -nodes -passin pass:1234qa!@!
-          openssl pkcs12 -in LB.pfx -clcerts -nokeys -out lb.crt -passin pass:1234qa!@!
+          for cert in LB PVWA PSM HTML5GW; do
+              if [ -f "${cert}.pfx" ]; then
+                  # Convert to lowercase for cleaner filenames
+                  lower_cert=$(echo "$cert" | tr '[:upper:]' '[:lower:]')
+                  
+                  openssl pkcs12 -in "${cert}.pfx" -nocerts -out "${lower_cert}.key" -nodes -passin pass:{{ lab_password }}
+                  openssl pkcs12 -in "${cert}.pfx" -clcerts -nokeys -out "${lower_cert}.crt" -passin pass:{{ lab_password }}
+                  cat "${lower_cert}.crt" "${lower_cert}.key" > "haproxy_${lower_cert}.pem"
+              fi
+          done
           
-          # HAProxy requires the private key and cert combined into a single file
-          cat lb.crt lb.key > haproxy_frontend.pem
-          chmod 600 haproxy_frontend.pem lb.key lb.crt
+          chmod 600 *.pem *.key *.crt RootCA.pem
           
-          echo "Done. Point your HAProxy frontend bind line to: bind *:443 ssl crt /opt/certs/haproxy_frontend.pem"
+          echo "Done. Extracted HAProxy-ready PEMs for LB, PVWA, PSM, and HTML5GW."
