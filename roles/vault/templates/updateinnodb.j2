@@ -1,0 +1,49 @@
+# Script Name: UpdateInnodbBufferPoolSizeInINI
+# Description: Updating the buffer pool size in my.ini file. If success, returns OK
+
+try
+{
+
+  $ini = Get-Content -Path '{{ vault_installation_path }}\\Server\\Database\\my.ini'
+  $memory_80_percent = [math]::Round((Get-WmiObject -ClassName 'Cim_ComputerSystem' | Measure-Object -Property TotalPhysicalMemory -Sum).Sum / 1024 * 0.8)
+  $memory_80_percent_upper_limit = $memory_80_percent * 1.1
+  $memory_80_percent_lower_limit = $memory_80_percent * 0.9
+  $bchange_inno_db_buffer_pool_size = $false
+
+  ($ini | ForEach-Object {
+      $key = $_.Split('=')[0]
+
+      if ($key -eq 'innodb_buffer_pool_size') {
+        $memory = $_.Split('=')[1]
+        $memory = $memory.Substring(0,$memory.Length - 1)
+        $memory_int = [int]$memory
+        if (($memory_int -gt $memory_80_percent_upper_limit) -or ($memory_int -lt $memory_80_percent_lower_limit)) {
+          $bchange_inno_db_buffer_pool_size = $true
+        }
+      }
+    })
+
+  if ($bchange_inno_db_buffer_pool_size) {
+    ($ini | ForEach-Object {
+        $key = $_.Split('=')[0]
+        if ($key -eq 'innodb_buffer_pool_size') {
+          $s_memory_80_percent = "{0000000000000000000}K" -f $memory_80_percent
+          '{0}={1}' -f $key,$s_memory_80_percent
+
+        }
+
+        else {
+          $_
+        }
+      } |
+
+      Set-Content -Path '{{ vault_installation_path }}\\Server\\Database\\my.ini')
+
+    Restart-Computer
+  }
+
+}
+catch
+{
+  "An error occurred"
+}

@@ -1,0 +1,77 @@
+---
+- name: "Restore VM to 'Fresh_Install' State"
+  hosts: vault, pvwa, cpm, psm, psmp*, htmlgw*, lb*
+  gather_facts: no
+  connection: local
+  serial: 1  # Restore one at a time to prevent storage overload
+
+  vars:
+    snapshot_name: "Fresh_Install"
+
+  tasks:
+    # --- SAFETY CHECK ---
+    - name: "SAFETY CHECK: Confirm Restore for {{ inventory_hostname }}"
+      pause:
+        prompt: "WARNING: You are about to wipe {{ inventory_hostname }} and revert to the 'Fresh_Install' state. Press Enter to continue or Ctrl+C to abort."
+      when: ansible_play_batch | length > 1
+
+    # --- 1. STOP VM (Required for Rollback) ---
+    - name: "1. Force Stop VM {{ vmid }}"
+      community.proxmox.proxmox_kvm:
+        api_host: "{{ proxmox_api_host | default('proxmox01.int.cybermark.tech') }}"
+        api_user: "{{ proxmox_user | default('root@pam') }}"
+        api_token_id: "{{ proxmox_token_id }}"
+        api_token_secret: "{{ proxmox_token_secret }}"
+        node: "{{ target_node }}"
+        vmid: "{{ vmid }}"
+        state: stopped
+        force: yes
+        timeout: 60
+      delegate_to: localhost
+
+    # --- 2. ROLLBACK SNAPSHOT ---
+    - name: "2. Rollback to Snapshot: {{ snapshot_name }}"
+      community.proxmox.proxmox_snap:
+        api_host: "{{ proxmox_api_host | default('proxmox01.int.cybermark.tech') }}"
+        api_user: "{{ proxmox_user | default('root@pam') }}"
+        api_token_id: "{{ proxmox_token_id }}"
+        api_token_secret: "{{ proxmox_token_secret }}"
+        hostname: "{{ target_node }}"
+        vmid: "{{ vmid }}"
+        snapname: "{{ snapshot_name }}"
+        state: rollback
+      delegate_to: localhost
+      register: rollback_status
+
+    # --- 3. START VM ---
+    - name: "3. Start VM {{ vmid }}"
+      community.proxmox.proxmox_kvm:
+        api_host: "{{ proxmox_api_host | default('proxmox01.int.cybermark.tech') }}"
+        api_user: "{{ proxmox_user | default('root@pam') }}"
+        api_token_id: "{{ proxmox_token_id }}"
+        api_token_secret: "{{ proxmox_token_secret }}"
+        node: "{{ target_node }}"
+        vmid: "{{ vmid }}"
+        state: started
+      delegate_to: localhost
+
+    # --- 4. WAIT FOR CONNECTIVITY ---
+    - name: "4. Wait for WinRM Port (5985)"
+      wait_for:
+        host: "{{ ip }}"
+        port: 5985
+        state: started
+        timeout: 300
+        delay: 5
+      delegate_to: localhost
+      when: ostype == 'win10' or ostype == 'win2019'
+
+    - name: "4. Wait for SSH Port (22)"
+      wait_for:
+        host: "{{ ip }}"
+        port: 22
+        state: started
+        timeout: 300
+        delay: 5
+      delegate_to: localhost
+      when: ostype == 'l26' or ostype == 'linux'

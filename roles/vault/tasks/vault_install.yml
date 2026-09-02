@@ -1,0 +1,105 @@
+---
+# tasks file for vault installation
+
+- name: Create ISS folder
+  ansible.windows.win_file:
+    path: "{{ vault_installationautomation_folder }}\\ISS"
+    state: directory
+
+- name: Load Vault template iss
+  ansible.windows.win_template:
+    src: templates/vault-iss.j2
+    dest: "{{ vault_extract_folder }}\\Server\\setup.iss"
+
+- name: Create StagingArea folder
+  ansible.windows.win_file:
+    path: "{{ vault_installation_drive }}\\PrivateArk\\StagingArea"
+    state: directory
+
+- name: Installation Block
+  block:
+
+    - name: Run Vault Installation
+      ansible.windows.win_shell: |
+        Start-Sleep -s 15
+        Start-Process -FilePath "setup.exe" -ArgumentList "/runfromtemp /clone_wait /w /s" -Wait
+        netsh http delete iplisten 127.0.0.1:5986
+        netsh http delete iplisten [::1]:5986
+      args:
+        chdir: "{{ vault_extract_folder }}\\Server"
+      async: 240
+      poll: 0
+
+    - name: Check connectivity after Vault Installation
+      ansible.builtin.wait_for_connection:
+        delay: 60
+        timeout: 240
+
+    - name: Query InstallShield Log to verify vault installation is completed
+      community.windows.win_lineinfile:
+        dest: "{{ vault_install_log }}"
+        regexp: "ResultCode=0"
+        state: absent
+      check_mode: true
+      register: presence
+      failed_when: not presence.changed
+
+    - name: Fetch vault installation log
+      ansible.builtin.fetch:
+        src: '{{ vault_install_log }}'
+        dest: '{{ log_path_dest }}/vault_install.log'
+        flat: true
+
+  rescue:
+
+    - name: Rescue - Fetch vault installation logs
+      ansible.builtin.fetch:
+        src: '{{ item }}'
+        dest: '{{ log_path_dest }}/{{ item | win_basename }}'
+        flat: true
+        fail_on_missing: false
+        validate_checksum: false
+      with_items:
+        - "{{ vault_install_log }}"
+        - "{{ vault_ita_log }}"
+        - "{{ vault_activation_log }}"
+        - "{{ vault_configuration_log }}"
+        - "{{ vault_db_log }}"
+
+    - name: Rescue - Fail installation stage
+      ansible.builtin.fail:
+        msg: 'ERROR: Installation failed. For more info check {{ log_path_dest }}/vault_install.log'
+
+- name: Check if vault service created successfully
+  ansible.windows.win_service:
+    name: "{{ vault_service_name }}"
+  register: vault_service_info
+
+- name: Check if vault service created successfully
+  ansible.windows.win_service:
+    name: "{{ vault_notification_service_name }}"
+  register: vault_notification_service_info
+
+- name: Check if vault service created successfully
+  ansible.windows.win_service:
+    name: "{{ vault_database_service_name }}"
+  register: vault_database_service_info
+
+- name: Set Vault service info as facts
+  ansible.builtin.set_fact:
+    vault_exists: true
+  when:
+    - vault_service_info.exists
+    - vault_notification_service_info.exists
+    - vault_database_service_info.exists
+
+- name: Fail if Vault was not installed successfully
+  ansible.builtin.fail:
+    msg: "Vault was not installed successfully"
+  when: not vault_exists
+
+- name: Fix recprv key on dbparm ini
+  community.windows.win_lineinfile:
+    dest: "{{ vault_installation_path }}\\Server\\Conf\\dbparm.ini"
+    line: "RecoveryPrvKey={{ keys_folder }}\\RecPrv.key"
+    regexp: '^RecoveryPrvKey='

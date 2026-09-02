@@ -1,0 +1,123 @@
+Signature-Version: 1.0
+Created-By: 17.0.8.1 (Microsoft)
+SHA-256-Digest-Manifest: ZB2IGGPebwppxivbjDHVVzI7nP50GkNtZkwVpu0fgP0=
+SHA-256-Digest-Manifest-Main-Attributes: H1U9gUkCEEWpWgVzcIKAsrxkOF2MefF
+ 5HgFTBAtyeZI=
+
+Name: tasks/vault_extract.yml
+SHA-256-Digest: FLA5lEl287x5LrN0Q6QQNaBPg+T19HDY5669/2baWBU=
+
+Name: tasks/main.yml
+SHA-256-Digest: OiJ0J+06bm25WrUwOm35IrLl8+nlkMQbZxZFmxl1d2o=
+
+Name: files/InstallationAutomation/PAKeyGen/PAKeyGen.exe
+SHA-256-Digest: kvfAg1cw7kclV8SK+eJd0CCiBe3YTTyMNgjQdfPwfgQ=
+
+Name: files/aws/Common.ps1
+SHA-256-Digest: FqFKxDyf4ZaboW7RrufMnXwikbGPerfvE7Na5bXjR2U=
+
+Name: tasks/vault_postinstall.yml
+SHA-256-Digest: tLPVV11vWwASn6G1TVT6H9Vxzs9DZ7AqQXOiDmac6Tc=
+
+Name: templates/updateinnodb.j2
+SHA-256-Digest: R67DDRGQwae1efkdliqQLqeaABjoKI5y/WIKsIKx0d0=
+
+Name: templates/vault-iss.j2
+SHA-256-Digest: 3uE+Hgsfj1IULaWRiVgr/mWvqAFbHDPLb6ns6ZK6D2U=
+
+Name: tasks/vault_install.yml
+SHA-256-Digest: pQOkrgb5Fo/5UmShzDF7rNEmx6yRLX6nCFNtApMvoKY=
+
+Name: defaults/main.yml
+SHA-256-Digest: lq/1rASrsHtaSgLuQloBQmcvms2rhXQdChu/rlUrPOI=
+
+Name: files/License.old.xml
+SHA-256-Digest: /JF2RoKRw0j6cuRgD4ZWRWfENOszTQvmN4QjPWM6VQM=
+
+Name: files/InstallationAutomation/Batches/CloudVendorStoreData.bat
+SHA-256-Digest: /AF9/bAdOCHuJI+1UlsmgnQBT/D34BC2IZWKCPo5g6Q=
+
+Name: tasks/vaultdr_install.yml
+SHA-256-Digest: C2yRLhtid6mZKG/BCjL++ECkoHSHZuSx7lNScuSC2Lw=
+
+Name: files/InstallationAutomation/Binaries/vcredist_x86.exe
+SHA-256-Digest: MwX488TuiO4/dkU41ihdQaQ2ZS+u7LJYnJDaFQEwK50=
+
+Name: files/InstallationAutomation/EnableTLS_1_2.reg
+SHA-256-Digest: u1kmizp3wvfghw/jdpPrhvV0ecCiNWSi+EFm1Cj82CY=
+
+Name: files/aws/VaultInit.ps1
+SHA-256-Digest: D1mJZqdkUg5IXMuJysknRHl+1c0N2mhmE28ZP83LeD4=
+
+Name: tasks/vault_activation.yml
+SHA-256-Digest: vpWMjTY+Ar8yyUhnO2RX5qddMy4u+FM0rRuPXuXLLDk=
+
+Name: tasks/vaultdr_postinstall.yml
+SHA-256-Digest: M4KrT+U03ChEyf3A/qLofiyHbE4PeUhOTd+usSvD9hU=
+
+Name: tasks/vault_prerequisites.yml
+SHA-256-Digest: j8Eg4iejlOgCPwugqxv0Zt6f8jqWXmumXcd4IXiNXHo=
+
+Name: files/aws/VaultPostInstall.ps1
+SHA-256-Digest: zz7GQdBYTjm5v+nhdhatxgHDsQ3pyS3qGfpE5irBYkU=
+
+Name: files/aws/AllowDR.ps1
+SHA-256-Digest: C6h/Ti2Gq1UilxiQNunFKOzUiGV+w7gbRMDM+oO/o9o=
+
+Name: tasks/vault_hardening.yml
+SHA-256-Digest: bLpsYd+WxG9E4DcDpvFVHFnY5cZLbE2ZuGu9owNfBkU=
+
+Name: handlers/main.yml
+SHA-256-Digest: m+8EGDwG28tJspjvoMQK3l03+YjbtrqSvyq6bKF2ZwM=
+
+Name: files/InstallationAutomation/Batches/CloudVendorRetrieveData.bat
+SHA-256-Digest: W5qRDNpJQv3BeMe7b9GFNQh4D3wCg2DnWvfQo4AXH80=
+
+Name: tasks/os_prerequisites.yml
+SHA-256-Digest: CxPgfAY+P6VsE+RsARrC96DsYPy1DHukfs4GNssztf8=
+
+Name: files/InstallationAutomation/PAKeyGen/calibeay32102o.dll
+SHA-256-Digest: 0sDOafRVPaNAsX2rx0AusP9Pz7cZ0OwM3PL7DHuiqm4=
+
+Name: vars/main.yml
+SHA-256-Digest: 9K2J+ZUQg8w3RopLDcbDgkLwnsyI/CH4NfCad15asMI=
+
+Name: README.md
+SHA-256-Digest: 7sQWl+uI4XWtpiFcjDe/Y1xymbBVBeGm5IGBeo5egbY=
+
+Name: files/aws/CloudWatch.ps1
+SHA-256-Digest: KO44rKiXRRq6UOBNnE8R46etqq3zT/zBUn4MHVs86uw=
+
+Name: files/aws/UserDataScript.ps1
+SHA-256-Digest: nRHzNWuajaNEbPKdJguQYR/II58YZBfCFN7stK+7MM8=
+
+Name: files/azure/Common.ps1
+SHA-256-Digest: 6Im4A/rpsU7CkpcmLOEGcQQlcpssHekx+avo0IMvF7s=
+
+Name: tasks/vault_clean.yml
+SHA-256-Digest: BK5wy9R9gk+yw2DImsb3hTx0Ck8HoDQdTE5DfwjJsJc=
+
+Name: files/aws/VaultTagKMS.ps1
+SHA-256-Digest: IF2frvx3koSdwpqOY2CouV+yQLc8KlmpOSt3E2dm4HU=
+
+Name: templates/vaultdr-iss.j2
+SHA-256-Digest: qVYvTuaRYq9o0VjmjuXMOMiPQZnYwNnvPT5/oCxtmIA=
+
+Name: files/azure/HardeningActivation.ps1
+SHA-256-Digest: l/IZXacZByg7aZxLWXBnHElgRLyRU9BeFjm0nJ2zaxc=
+
+Name: files/azure/HardenAzureFW.ps1
+SHA-256-Digest: nLMkIPu/XvPbwXliVJ/TjCrQboS5/bqPSnz4Qd0K/jk=
+
+Name: files/aws/amazon-cloudwatch-agent.json
+SHA-256-Digest: C8kYUffm7TWVl0cxYLvRf/04Zsd4EbbTp3am2rr5R28=
+
+Name: tasks/vault_validateparameters.yml
+SHA-256-Digest: nvg2QojRo4BwzQHv7oZ0ddoEbUW4+4Yl8LvLPw6Ayh8=
+
+Name: files/InstallationAutomation/PAKeyGen/cassleay32102o.dll
+SHA-256-Digest: IKRKJdgm1icE3ikrcH2zzRb8jufr/ZTsYOVAWtSRoR0=
+
+Name: meta/main.yml
+SHA-256-Digest: DuZsPDM2c3KFFod2lzKK6CInUfws9tUS1/v2YGLvCE0=
+

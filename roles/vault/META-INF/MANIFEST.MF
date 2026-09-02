@@ -1,0 +1,120 @@
+Manifest-Version: 1.0
+Created-By: 17.0.8.1 (Microsoft)
+
+Name: tasks/vault_extract.yml
+SHA-256-Digest: xfI9M83fl68PWPob4jOG7Stzxb7xNkWLkObkRimtuLI=
+
+Name: tasks/main.yml
+SHA-256-Digest: IKgdmthoqfC2v1Czo5tGKXS0now7bHAlLStrvcg9PYE=
+
+Name: files/InstallationAutomation/PAKeyGen/PAKeyGen.exe
+SHA-256-Digest: CV+x3l2Bmn629feE3iCM068w+IwXOs0j1rrlrqB/1KQ=
+
+Name: files/aws/Common.ps1
+SHA-256-Digest: SLi1nc0r6LrYzpwkLhQj85qZ8WIfkBaKdm+a6uJ2S5A=
+
+Name: tasks/vault_postinstall.yml
+SHA-256-Digest: Iffpx7QNyiXswyWnohp9R3HChVKeS6f7S9u95Ih4SLA=
+
+Name: templates/updateinnodb.j2
+SHA-256-Digest: L0K8BwnX9sFdH1zk9VDIAma/5Owl4Hx9Kew0u4+Nibc=
+
+Name: templates/vault-iss.j2
+SHA-256-Digest: yh4GsxMU9aYjicRSbcbzHxVxBGvdh2fwIxRsZ9Px+6M=
+
+Name: tasks/vault_install.yml
+SHA-256-Digest: lybuucEHmCprH1+d5dvhv2s+Ujnxfju8sq2W/Ok/RuU=
+
+Name: defaults/main.yml
+SHA-256-Digest: VB8XLLq0JqshAO2gAzCmCoWYaH3O5QMHjv7Sv/Ehw8M=
+
+Name: files/License.old.xml
+SHA-256-Digest: anRlYDR9kR1VbSPKUwFy5QfWPg+sqtYvNYd7o+hMutY=
+
+Name: files/InstallationAutomation/Batches/CloudVendorStoreData.bat
+SHA-256-Digest: HNSWgn4Us1Z5dXaXqRglqnCQw91JPOSG5VsU8GnugLI=
+
+Name: tasks/vaultdr_install.yml
+SHA-256-Digest: 0HIefcy97/jDisIEFBZyrYk04wV0jbL6L4peHmeKpT8=
+
+Name: files/InstallationAutomation/Binaries/vcredist_x86.exe
+SHA-256-Digest: oiiV5VsmIC6uFmg47b4upqrQDX6mAMEfijHt5cvOIEg=
+
+Name: files/InstallationAutomation/EnableTLS_1_2.reg
+SHA-256-Digest: kuwfH6JsRHOmlgqoUHiUxSVs+jL/nmf2/BZVA+xZELA=
+
+Name: files/aws/VaultInit.ps1
+SHA-256-Digest: 1ersTk9xPSLDyVOzxO4tqZdnsvHMzfuB/TzTzzlWd6k=
+
+Name: tasks/vault_activation.yml
+SHA-256-Digest: 0OaX+Tg+3H6dS+aG+K9HIkegy2cbRMzvQdxFYP4mOZE=
+
+Name: tasks/vaultdr_postinstall.yml
+SHA-256-Digest: UakikciBD9sOfGRAoUPhG2wpwL3Ljibxqgh6R8L5IZ4=
+
+Name: tasks/vault_prerequisites.yml
+SHA-256-Digest: 6fKRcqrld2BY/9q6liJMEYuzxbMoJ2XyohReqYPQUdc=
+
+Name: files/aws/VaultPostInstall.ps1
+SHA-256-Digest: 0REXExZovD6equwz6Vb5C0jaLxHNlowkOOI+dTCgvdc=
+
+Name: files/aws/AllowDR.ps1
+SHA-256-Digest: mCnWHoYUFvQa/0QwaMVXcACUgUa8EAtN5y0uA9cgYO4=
+
+Name: tasks/vault_hardening.yml
+SHA-256-Digest: GYtEAkGumrSgsw63/xe2m88SPwo4LwYeGjxwZ+Nuksg=
+
+Name: handlers/main.yml
+SHA-256-Digest: Jx4Kbw6ZjULfh5ZggsWselx8hA6a65EdMchzs/BNAx8=
+
+Name: files/InstallationAutomation/Batches/CloudVendorRetrieveData.bat
+SHA-256-Digest: j4m7RRzQWHgnvSMIFCtZ7vT2fjK1/8hUlJEp6rlcatk=
+
+Name: tasks/os_prerequisites.yml
+SHA-256-Digest: o2bF7NzdZ27i5RzxpSPcabZiWHswmFdh7peWG+BIX9o=
+
+Name: files/InstallationAutomation/PAKeyGen/calibeay32102o.dll
+SHA-256-Digest: 4xkd3swiphX50vJTZuxIztUxfp2DLZqTr5i6hlw0pD4=
+
+Name: vars/main.yml
+SHA-256-Digest: fZAicsAgULfwtVSmnlad6/KljRQC8Rbzw8IgFIUqrtk=
+
+Name: README.md
+SHA-256-Digest: YJQQNArOC3ROMj6aL7BsTIWLe+zi1vq09gpzbB6Hpaw=
+
+Name: files/aws/CloudWatch.ps1
+SHA-256-Digest: vcPkUifvoC4l9N+gmIFajB1g6Em0HmgwB0kMcGxfv0Y=
+
+Name: files/aws/UserDataScript.ps1
+SHA-256-Digest: 8miORHpDtOL1bZ7eYitGXUOMsBJvKokPwORP88s5M3s=
+
+Name: files/azure/Common.ps1
+SHA-256-Digest: BDd5r3UPNMY7dM3r0PIIzc0wxLspE44Oa+JsR7MiNuE=
+
+Name: tasks/vault_clean.yml
+SHA-256-Digest: ZHm2UXb5gR9mRiKVRCB1m60LjVMI8ihSlbKSY2gvR2k=
+
+Name: files/aws/VaultTagKMS.ps1
+SHA-256-Digest: 3pQi05YZDkkQcoQFztk06jUg0403yTduf2LXbpo2zGU=
+
+Name: templates/vaultdr-iss.j2
+SHA-256-Digest: IzsnCXvMfWD3r1uYqg+FxFLFvx6EwFHAcT9avy7L8LY=
+
+Name: files/azure/HardeningActivation.ps1
+SHA-256-Digest: /0Phwu+gYvSYAq38PkKxe7JJQrnVoBFWt+TPg/VYdZE=
+
+Name: files/azure/HardenAzureFW.ps1
+SHA-256-Digest: 9g42ziCwDQkaAMF7DkN2BhO6eNCTiFauoNdIiNpnQ1E=
+
+Name: files/aws/amazon-cloudwatch-agent.json
+SHA-256-Digest: 5SPV9dRNczV8RysXoLo+a/O19brjrdAXSgHXMq0U268=
+
+Name: tasks/vault_validateparameters.yml
+SHA-256-Digest: VLA+T0YJI0/obJZXoMDj6AyaVuQwC4Q1Goww6Bk/GbU=
+
+Name: files/InstallationAutomation/PAKeyGen/cassleay32102o.dll
+SHA-256-Digest: VycSKc3RqXYE1ig4ZBgUlUxhZ/Ha2gB/psvlSRrI1FY=
+
+Name: meta/main.yml
+SHA-256-Digest: QPdEG3DQz6q3yAavS670O1KoDTC7EPRlMRhO2qUSFmQ=
+

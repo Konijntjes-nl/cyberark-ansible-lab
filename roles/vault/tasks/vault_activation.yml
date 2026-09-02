@@ -1,0 +1,132 @@
+---
+
+- name: Activation Block
+  block:
+
+    - name: Add WinRM access Lines to dbparm ini
+      community.windows.win_lineinfile:
+        path: "{{ vault_installation_path }}\\Server\\Conf\\dbparm.ini"
+        line: "{{ item }}"
+      with_items:
+        - "AllowNonStandardFWAddresses=[1.1.1.1-255.255.255.255],Yes,5986:outbound/tcp,5986:inbound/tcp"
+
+    - name: Run CAVaultManager on AWS Primary Vault
+      ansible.windows.win_shell: |
+        .\CAVaultManager.exe PostInstall `
+        /AdminPass {{ vault_admin_password }} `
+        /MasterPass {{ vault_master_password }} `
+        /RecPub {{ keys_folder }}\\{{ strcp.original_basename }} `
+        /DRPassword {{ vault_dr_password }} `
+        /LicensePath {{ keys_folder }}\\{{ stlc.original_basename }} `
+        /AcceptEULA `
+        /CloudVendor AWS `
+        /CloudRegion {{ cloud_region }}
+      args:
+        chdir: "{{ vault_installation_path }}\\Server"
+      when:
+        - vault_role == "primary"
+        - platform == "aws"
+        - accept_eula | type_debug == 'bool' and accept_eula
+
+    - name: Enable DR on AWS Primary Vault
+      ansible.windows.win_shell: |
+        .\CAVaultManager.exe EnableVaultRegistration `
+        /AdminUserName Administrator `
+        /AdminPass {{ vault_admin_password }} `
+        /Secret {{ vault_secret }} `
+        /DRUserName DR
+      args:
+        chdir: "{{ vault_installation_path }}\\Server"
+      when:
+        - vault_role == "primary"
+        - primary_enable_dr
+        - platform == "aws"
+        - accept_eula | type_debug == 'bool' and accept_eula
+
+    - name: Run PADR on AWS DR Vault
+      ansible.windows.win_shell: |
+        .\PADR.exe RegisterVault `
+        /PrimaryVaultIP {{ vault_primary_ip }} `
+        /DRUSERNAME DR `
+        /DRUSERPASSWORD {{ vault_dr_password }} `
+        /DRUSERSECRET {{ vault_secret }} `
+        /EnableFailOver `
+        /AcceptEULA `
+        /CloudVendor AWS `
+        /CloudRegion {{ cloud_region }}
+      args:
+        chdir: "{{ vault_installation_path }}\\PADR"
+      when:
+        - vault_role == "dr"
+        - platform == "aws"
+        - accept_eula | type_debug == 'bool' and accept_eula
+
+    - name: Run CAVaultManager on Azure Primary Vault
+      ansible.windows.win_shell: |
+        .\CAVaultManager.exe PostInstall `
+        /AdminPass {{ vault_admin_password }} `
+        /MasterPass {{ vault_master_password }} `
+        /RecPub {{ keys_folder }}\\{{ strcp.original_basename }} `
+        /DRPassword {{ vault_dr_password }} `
+        /LicensePath {{ keys_folder }}\\{{ stlc.original_basename }} `
+        /AcceptEULA `
+        /CloudVendor AZURE `
+        /VKMName {{ keyvault_dns_name }} `
+        /RDPGateway 10.10.10.10
+      args:
+        chdir: "{{ vault_installation_path }}\\Server"
+      when:
+        - vault_role == "primary"
+        - platform == "azure"
+        - accept_eula | type_debug == 'bool' and accept_eula
+
+    - name: Enable DR on Azure Primary Vault
+      ansible.windows.win_shell: |
+        .\CAVaultManager.exe EnableVaultRegistration `
+        /AdminUserName Administrator `
+        /AdminPass {{ vault_admin_password }} `
+        /Secret {{ vault_secret }} `
+        /DRUserName DR
+      args:
+        chdir: "{{ vault_installation_path }}\\Server"
+      when:
+        - vault_role == "primary"
+        - primary_enable_dr
+        - platform == "azure"
+        - accept_eula | type_debug == 'bool' and accept_eula
+
+    - name: Run PADR on Azure DR Vault
+      ansible.windows.win_shell: |
+        .\PADR.exe RegisterVault `
+        /PRIMARYVAULTIP {{ vault_primary_ip }} `
+        /DRUSERNAME DR `
+        /DRUSERPASSWORD {{ vault_dr_password }} `
+        /DRUSERSECRET {{ vault_secret }} `
+        /CLOUDVENDOR Azure /ENABLEFAILOVER `
+        /ACCEPTEULA `
+        /VKMName {{ keyvault_dns_name }} `
+        /RDPGATEWAYIP 10.10.10.10
+      args:
+        chdir: "{{ vault_installation_path }}\\PADR"
+      when:
+        - vault_role == "dr"
+        - platform == "azure"
+        - accept_eula | type_debug == 'bool' and accept_eula
+
+    - name: Fetch vault activation log
+      ansible.builtin.fetch:
+        src: '{{ vault_activation_log }}'
+        dest: '{{ log_path_dest }}/vault_activation.log'
+        flat: true
+
+  rescue:
+
+    - name: Rescue - Fetch vault activation log
+      ansible.builtin.fetch:
+        src: '{{ vault_activation_log }}'
+        dest: '{{ log_path_dest }}/vault_activation.log'
+        flat: true
+
+    - name: Rescue - Fail activation stage
+      ansible.builtin.fail:
+        msg: 'ERROR: Activation failed. For more info check {{ log_path_dest }}/vault_activation.log'

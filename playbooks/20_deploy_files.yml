@@ -1,14 +1,32 @@
 ---
 - name: "Mount CyberArk Installation Binaries (ISO)"
-  hosts: vault, pvwa, cpm, psm
+  hosts: vault, pvwa, cpm, psm, psmp*, htmlgw*
   gather_facts: no
   vars:
-    # Adjust these to match the exact file name and storage pool in your Proxmox GUI
     iso_storage_pool: "local"
-    cyberark_iso_name: "CyberArk_PAS_Installers.iso"
+    cyberark_iso_name: "CyberArk_Software.iso"
 
   tasks:
-    - name: "Attach ISO to Virtual Machine (IDE2)"
+    # ======================================================================
+    # PROXMOX HARDWARE ATTACHMENT & CLEANUP
+    # ======================================================================
+    - name: "Attach ISO to Windows via native qm CLI (scsi2 hot-plug)"
+      ansible.builtin.command: "qm set {{ vmid }} -scsi2 {{ iso_storage_pool }}:iso/{{ cyberark_iso_name }},media=cdrom"
+      delegate_to: "{{ target_node }}"
+      vars:
+        ansible_user: root
+      when: "'windows' in group_names"
+
+    - name: "Clean up ghost scsi2 drive on Linux nodes"
+      ansible.builtin.command: "qm set {{ vmid }} -delete scsi2"
+      delegate_to: "{{ target_node }}"
+      vars:
+        ansible_user: root
+      when: "'linux' in group_names"
+      failed_when: false
+
+    # 1. Gracefully shut down the Linux VMs
+    - name: "Shut down Linux nodes for IDE hardware modification"
       community.proxmox.proxmox_kvm:
         api_host: "{{ proxmox_api_host }}"
         api_user: "{{ proxmox_user }}"
@@ -17,21 +35,99 @@
         validate_certs: false
         node: "{{ target_node }}"
         vmid: "{{ vmid }}"
-        update: yes
-        ide:
-          ide2: "{{ iso_storage_pool }}:iso/{{ cyberark_iso_name }},media=cdrom"
+        state: stopped
+        timeout: 60
       delegate_to: localhost
+      when: "'linux' in group_names"
 
-    - name: "Wait for Windows to recognize the CD-ROM"
-      ansible.windows.win_shell: |
-        $drive = Get-Volume | Where-Object { $_.DriveType -eq 'CD-ROM' -and $_.FileSystem -ne $null }
-        if ($drive) { Write-Output ($drive.DriveLetter + ":\") } else { exit 1 }
-      register: cdrom_mount
+    # 2. Attach the IDE drive while the VM is fully stopped
+    - name: "Attach ISO to Linux via native qm CLI (ide0 cold-plug)"
+      ansible.builtin.command: "qm set {{ vmid }} -ide0 {{ iso_storage_pool }}:iso/{{ cyberark_iso_name }},media=cdrom"
+      delegate_to: "{{ target_node }}"
+      vars:
+        ansible_user: root
+      when: "'linux' in group_names"
+
+    # 3. Power the VMs back on
+    - name: "Start Linux nodes to detect IDE hardware"
+      community.proxmox.proxmox_kvm:
+        api_host: "{{ proxmox_api_host }}"
+        api_user: "{{ proxmox_user }}"
+        api_token_id: "{{ proxmox_token_id }}"
+        api_token_secret: "{{ proxmox_token_secret }}"
+        validate_certs: false
+        node: "{{ target_node }}"
+        vmid: "{{ vmid }}"
+        state: started
+      delegate_to: localhost
+      when: "'linux' in group_names"
+
+    - name: "Wait for SSH to become available on Linux nodes"
+      ansible.builtin.wait_for_connection:
+        delay: 15
+        timeout: 300
+      when: "'linux' in group_names"
+
+    # ======================================================================
+    # WINDOWS MOUNTING LOGIC (Exclude 'cidata')
+    # ======================================================================
+    - name: "Wait for Windows to recognize the CyberArk CD-ROM"
+      ansible.windows.win_shell:
+        cmd: |
+          $drive = Get-Volume | Where-Object { $_.DriveType -eq 'CD-ROM' -and $_.FileSystemLabel -notmatch 'cidata' -and $_.FileSystemLabel -ne $null } | Select-Object -First 1
+          if ($drive) { Write-Output "$($drive.DriveLetter):\" } else { exit 1 }
+      register: win_cdrom_mount
       retries: 5
       delay: 5
-      until: cdrom_mount.rc == 0
+      until: win_cdrom_mount.rc == 0
+      changed_when: false
+      when: "'windows' in group_names"
+
+    - name: "Display the Windows mounted drive path"
+      ansible.builtin.debug:
+        msg: "CyberArk Binaries mounted at {{ win_cdrom_mount.stdout | trim }} on {{ inventory_hostname }}"
+      when: "'windows' in group_names"
+
+    # ======================================================================
+    # LINUX MOUNTING LOGIC (UDF / Label Detection)
+    # ======================================================================
+    - name: "Ensure /mnt/cdrom directory exists on Linux"
+      ansible.builtin.file:
+        path: /mnt/cdrom
+        state: directory
+        mode: '0755'
+      become: yes
+      when: "'linux' in group_names"
+
+    - name: "Find the CyberArk CD-ROM device"
+      ansible.builtin.shell:
+        cmd: |
+          DEV=$(blkid | grep -i "CyberArk_Software" | awk -F: '{print $1}' | head -n 1)
+          if [ -n "$DEV" ]; then
+            echo "$DEV"
+            exit 0
+          else
+            exit 1
+          fi
+      register: linux_cdrom_dev
+      become: yes
+      when: "'linux' in group_names"
+      retries: 3
+      delay: 5
+      until: linux_cdrom_dev.rc == 0
       changed_when: false
 
-    - name: "Display the mounted drive path"
+    - name: "Mount CD-ROM to /mnt/cdrom on Linux Nodes"
+      ansible.builtin.mount:
+        path: /mnt/cdrom
+        src: "{{ linux_cdrom_dev.stdout }}"
+        fstype: udf
+        opts: ro
+        state: mounted
+      become: yes
+      when: "'linux' in group_names"
+
+    - name: "Display the Linux mounted drive path"
       ansible.builtin.debug:
-        msg: "CyberArk Binaries successfully mounted at {{ cdrom_mount.stdout | trim }} on {{ inventory_hostname }}"
+        msg: "CyberArk Binaries mounted at /mnt/cdrom on {{ inventory_hostname }} using device {{ linux_cdrom_dev.stdout }}"
+      when: "'linux' in group_names"

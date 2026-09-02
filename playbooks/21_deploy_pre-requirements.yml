@@ -7,46 +7,142 @@
       set_fact:
         ansible_host: "{{ ip }}"
 
-- name: Deploy Password Vault Web Access (PVWA)
+# ======================================================================
+# DEPLOY PVWA PRE-REQUIREMENTS
+# ======================================================================
+- name: Deploy Password Vault Web Access (PVWA) Pre-Requirements
   hosts: pvwa
   gather_facts: yes
+  pre_tasks:
+    - name: "Get CD-ROM Drive Letter"
+      ansible.windows.win_shell:
+        cmd: |
+          (Get-Volume | Where-Object { $_.DriveType -eq 'CD-ROM' -and $_.FileSystemLabel -notmatch 'cidata' -and $_.FileSystemLabel -ne $null } | Select-Object -First 1).DriveLetter
+      register: cdrom
+      changed_when: false
+      
+    - name: "Set ISO Path Fact"
+      set_fact:
+        iso_drive: "{{ cdrom.stdout | trim }}:\\"
+
+    - name: "Create default packages directory"
+      ansible.windows.win_file:
+        path: "C:\\Cyberark\\packages\\Password Vault Web Access"
+        state: directory
+
+    - name: "Stage PVWA files from read-only ISO to local disk"
+      ansible.windows.win_copy:
+        src: "{{ iso_drive }}Password Vault Web Access\\Password Vault Web Access-Rls-v15.2.1\\"
+        dest: "C:\\Cyberark\\packages\\Password Vault Web Access\\"
+        remote_src: yes
+
+    - name: "Remove Read-Only attribute from staged files"
+      ansible.windows.win_shell: |
+        Get-ChildItem -Path "C:\Cyberark\packages\Password Vault Web Access" -Recurse | Where-Object { $_.IsReadOnly } | ForEach-Object { $_.IsReadOnly = $false }
+
   roles:
     - role: pvwa
       vars:
-        pvwa_extract: true
+        pvwa_extract: false
         pvwa_ignore_checksum: true
         pvwa_prerequisites: true
-        pvwa_install: true
-        pvwa_hardening: true
-        pvwa_registration: true
-        pvwa_clean: true
+        
+        # Disable all installation, hardening, and cleanup steps
+        pvwa_install: false
+        pvwa_hardening: false
+        pvwa_registration: false
+        pvwa_clean: false
 
-- name: Deploy Central Policy Manager (CPM)
+# ======================================================================
+# DEPLOY CPM PRE-REQUIREMENTS
+# ======================================================================
+- name: Deploy Central Policy Manager (CPM) Pre-Requirements
   hosts: cpm
   gather_facts: yes
   serial: 1
+  pre_tasks:
+    - name: "Get CD-ROM Drive Letter"
+      ansible.windows.win_shell:
+        cmd: |
+          (Get-Volume | Where-Object { $_.DriveType -eq 'CD-ROM' -and $_.FileSystemLabel -notmatch 'cidata' -and $_.FileSystemLabel -ne $null } | Select-Object -First 1).DriveLetter
+      register: cdrom
+      changed_when: false
+      
+    - name: "Set ISO Path Fact"
+      set_fact:
+        iso_drive: "{{ cdrom.stdout | trim }}:\\"
+
+    - name: "Create default packages directory"
+      ansible.windows.win_file:
+        path: "C:\\Cyberark\\packages\\Central Policy Manager"
+        state: directory
+
+    - name: "Stage CPM files from read-only ISO to local disk"
+      ansible.windows.win_copy:
+        src: "{{ iso_drive }}Central Policy Manager\\Central Policy Manager-Rls-v15.2.1\\"
+        dest: "C:\\Cyberark\\packages\\Central Policy Manager\\"
+        remote_src: yes
+
+    - name: "Remove Read-Only attribute from staged files"
+      ansible.windows.win_shell: |
+        Get-ChildItem -Path "C:\Cyberark\packages\Central Policy Manager" -Recurse | Where-Object { $_.IsReadOnly } | ForEach-Object { $_.IsReadOnly = $false }
+
   roles:
     - role: cpm
       vars:
-        cpm_extract: true
+        cpm_extract: false
         cpm_ignore_checksum: true
         cpm_prerequisites: true
-        cpm_install: true
-        cpm_hardening: true
-        cpm_registration: true
-        cpm_clean: true
+        
+        # Disable all installation, hardening, and cleanup steps
+        cpm_install: false
+        cpm_hardening: false
+        cpm_registration: false
+        cpm_clean: false
 
-- name: Deploy Privileged Session Manager (PSM)
+# ======================================================================
+# DEPLOY PSM PRE-REQUIREMENTS
+# ======================================================================
+- name: Deploy Privileged Session Manager (PSM) Pre-Requirements
   hosts: psm
   gather_facts: yes
+  pre_tasks:
+    - name: "Get CD-ROM Drive Letter"
+      ansible.windows.win_shell:
+        cmd: |
+          (Get-Volume | Where-Object { $_.DriveType -eq 'CD-ROM' -and $_.FileSystemLabel -notmatch 'cidata' -and $_.FileSystemLabel -ne $null } | Select-Object -First 1).DriveLetter
+      register: cdrom
+      changed_when: false
+      
+    - name: "Set ISO Path Fact"
+      set_fact:
+        iso_drive: "{{ cdrom.stdout | trim }}:\\"
+
+    - name: "Create default packages directory"
+      ansible.windows.win_file:
+        path: "C:\\Cyberark\\packages\\Privileged Session Manager"
+        state: directory
+
+    - name: "Stage PSM files from read-only ISO to local disk"
+      ansible.windows.win_copy:
+        src: "{{ iso_drive }}Privileged Session Manager\\Privileged Session Manager-Rls-v15.2\\"
+        dest: "C:\\Cyberark\\packages\\Privileged Session Manager\\"
+        remote_src: yes
+
+    - name: "Remove Read-Only attribute from staged files"
+      ansible.windows.win_shell: |
+        Get-ChildItem -Path "C:\Cyberark\packages\Privileged Session Manager" -Recurse | Where-Object { $_.IsReadOnly } | ForEach-Object { $_.IsReadOnly = $false }
+
   roles:
     - role: psm
       vars:
-        psm_extract: true
+        psm_extract: false
         psm_ignore_checksum: true
         psm_prerequisites: true
-        psm_install: true
-        psm_postinstall: true
-        psm_hardening: true
-        psm_registration: true
-        psm_clean: true
+        
+        # Disable all installation, hardening, and cleanup steps
+        psm_install: false
+        psm_postinstall: false
+        psm_hardening: false
+        psm_registration: false
+        psm_clean: false

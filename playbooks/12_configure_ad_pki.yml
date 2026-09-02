@@ -42,7 +42,24 @@
     - role: domain_controller
 
 # ==============================================================================
-# PLAY 2.5: PASSWORD SYNCHRONIZATION (Race Condition Fix)
+# PLAY 2.5: DNS CONFIGURATION
+# ==============================================================================
+- name: "Configure DNS Forwarders"
+  hosts: dc-01, dc-02
+  gather_facts: no
+  tasks:
+    - name: "Set Active Directory DNS Forwarder to Gateway (10.0.3.254)"
+      ansible.windows.win_shell: |
+        $CurrentForwarders = (Get-DnsServerForwarder).IPAddress.IPAddressToString
+        if ($CurrentForwarders -notcontains "10.0.3.254") {
+            Set-DnsServerForwarder -IPAddress "10.0.3.254" -UseRootHint $true
+            Write-Output "Forwarder Added"
+        }
+      register: dns_forwarder
+      changed_when: "'Forwarder Added' in dns_forwarder.stdout"
+
+# ==============================================================================
+# PLAY 2.6: PASSWORD SYNCHRONIZATION (Race Condition Fix)
 # ==============================================================================
 #- name: "Force Sync Domain Admin Password"
 #  hosts: dc-01

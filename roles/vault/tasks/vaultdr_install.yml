@@ -1,0 +1,57 @@
+---
+# tasks file for vault installation
+
+- name: Load VaultDR template iss
+  ansible.windows.win_template:
+    src: templates/vaultdr-iss.j2
+    dest: "{{ vault_extract_folder }}\\Disaster Recovery\\setup.iss"
+
+- name: Installation Block
+  block:
+
+    - name: Run Vault DR installation
+      ansible.windows.win_shell: |
+        Start-Process -FilePath "setup.exe" -ArgumentList "/runfromtemp /clone_wait /w /s" -Wait
+      args:
+        chdir: "{{ vault_extract_folder }}\\Disaster Recovery"
+
+    - name: Query InstallShield Log to verify vaultdr installation is completed
+      community.windows.win_lineinfile:
+        dest: "{{ vaultdr_install_log }}"
+        regexp: "ResultCode=0"
+        state: absent
+      check_mode: true
+      register: presence
+      failed_when: not presence.changed
+
+    - name: Fetch vaultdr installation log
+      ansible.builtin.fetch:
+        src: '{{ vaultdr_install_log }}'
+        dest: '{{ log_path_dest }}/vault_dr_install.log'
+        flat: true
+
+  rescue:
+
+    - name: Rescue - Fetch vaultdr installation log
+      ansible.builtin.fetch:
+        src: '{{ vaultdr_install_log }}'
+        dest: '{{ log_path_dest }}/vault_dr_install.log'
+        flat: true
+
+    - name: Rescue - Fail DR installation stage
+      ansible.builtin.fail:
+        msg: 'ERROR: Vault DR Installation failed. For more info check {{ log_path_dest }}/vault_dr_install.log'
+
+- name: Check if vaultdr service created successfully
+  ansible.windows.win_service:
+    name: "{{ vaultdr_service_name }}"
+  register: vaultdr_service_info
+
+- name: Set VaultDR service info as facts
+  ansible.builtin.set_fact:
+    vaultdr_exists: "{{ vaultdr_service_info.exists }}"
+
+- name: Fail if Vault DR was not installed successfully
+  ansible.builtin.fail:
+    msg: "Vault was not installed successfully"
+  when: not vaultdr_exists

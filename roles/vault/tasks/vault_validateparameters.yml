@@ -1,0 +1,44 @@
+---
+# tasks file for vault_validateparameters
+
+- name: Check EULA is accepted
+  ansible.builtin.fail:
+    msg: "You must accept EULA to start the playbook"
+  when: (accept_eula | type_debug != 'bool' and accept_eula | lower != "yes") or (accept_eula | type_debug == 'bool' and not accept_eula)
+
+- name: Check if Vault was already installed
+  ansible.windows.win_service:
+    name: "{{ vault_service_name }}"
+  register: vault_service_info
+
+- name: Check if Vault service exists
+  ansible.windows.win_service:
+    name: "{{ vault_service_name }}"
+  register: vault_service_info
+
+- name: Check if Vault notification service exists
+  ansible.windows.win_service:
+    name: "{{ vault_notification_service_name }}"
+  register: vault_notification_service_info
+
+- name: Check if Vault database service exists
+  ansible.windows.win_service:
+    name: "{{ vault_database_service_name }}"
+  register: vault_database_service_info
+
+- name: Set Vault service info as facts
+  ansible.builtin.set_fact:
+    vault_exists: true
+  when:
+    - vault_service_info.exists
+    - vault_notification_service_info.exists
+    - vault_database_service_info.exists
+
+- name: Check if vaultdr service exists
+  ansible.windows.win_service:
+    name: "{{ vaultdr_service_name }}"
+  register: vaultdr_service_info
+
+- name: Set VaultDR service info as fact
+  ansible.builtin.set_fact:
+    vaultdr_exists: "{{ vaultdr_service_info.exists }}"

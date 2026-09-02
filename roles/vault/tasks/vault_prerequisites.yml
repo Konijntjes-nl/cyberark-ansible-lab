@@ -1,0 +1,179 @@
+---
+# tasks file for vault_prerequisites
+
+- name: Download and install vcredist 2022 x86 (C++)
+  ansible.windows.win_shell: |
+    $url = "https://aka.ms/vs/17/release/vc_redist.x86.exe"
+    $output = "$env:TEMP\vc_redist.x86.exe"
+    $expectedHash = "{{ vcredist_x86_checksum | default('') }}"
+    Invoke-WebRequest -Uri $url -OutFile $output -UseBasicParsing
+
+    if (-Not (Test-Path $output)) {
+        Write-Error "Download failed: $output not found"
+        exit 1
+    }
+    # F-012 (POC-1586) — integrity check. Opt-in via vcredist_x86_checksum.
+    if ($expectedHash) {
+        $actualHash = (Get-FileHash -Algorithm SHA256 -Path $output).Hash.ToLower()
+        if ($actualHash -ne $expectedHash.ToLower()) {
+            Remove-Item -Path $output -Force
+            Write-Error "Checksum mismatch for $output. Expected $expectedHash, got $actualHash"
+            exit 1
+        }
+    }
+    Start-Process -FilePath $output -ArgumentList "/quiet", "/norestart" -Wait
+    Remove-Item -Path $output -Force
+  args:
+    executable: powershell
+  register: install_vcredist_x86
+  failed_when: install_vcredist_x86.rc != 0 or "'Download failed'" in install_vcredist_x86.stdout or "'Checksum mismatch'" in install_vcredist_x86.stdout
+
+- name: Download and install vcredist 2022 x64 (C++)
+  ansible.windows.win_shell: |
+    $url = "https://aka.ms/vs/17/release/vc_redist.x64.exe"
+    $output = "$env:TEMP\vc_redist.x64.exe"
+    $expectedHash = "{{ vcredist_x64_checksum | default('') }}"
+    Invoke-WebRequest -Uri $url -OutFile $output -UseBasicParsing
+
+    if (-Not (Test-Path $output)) {
+        Write-Error "Download failed: $output not found"
+        exit 1
+    }
+    # F-012 (POC-1586) — integrity check. Opt-in via vcredist_x64_checksum.
+    if ($expectedHash) {
+        $actualHash = (Get-FileHash -Algorithm SHA256 -Path $output).Hash.ToLower()
+        if ($actualHash -ne $expectedHash.ToLower()) {
+            Remove-Item -Path $output -Force
+            Write-Error "Checksum mismatch for $output. Expected $expectedHash, got $actualHash"
+            exit 1
+        }
+    }
+    Start-Process -FilePath $output -ArgumentList "/quiet", "/norestart" -Wait
+    Remove-Item -Path $output -Force
+  args:
+    executable: powershell
+  register: install_vcredist_x64
+  failed_when: install_vcredist_x64.rc != 0 or "'Download failed'" in install_vcredist_x64.stdout or "'Checksum mismatch'" in install_vcredist_x64.stdout
+
+- name: Check if vcredist140 x64 is installed and the version is correct
+  ansible.windows.win_shell: |
+    $x64Installed = Test-Path "HKLM:\SOFTWARE\Microsoft\VisualStudio\14.0\VC\Runtimes\x64"
+    if (-not $x64Installed) {
+        Write-Output "vcredist140 x64 is not installed"
+        exit 1
+    }
+    $x64Version = (Get-ItemProperty "HKLM:\SOFTWARE\Microsoft\VisualStudio\14.0\VC\Runtimes\x64").Version
+    if ($x64Version -notmatch "^v14\.\d+\.\d+(\.\d+)?") {
+        Write-Output "Incorrect version of vcredist140 x64 installed: $x64Version"
+        exit 1
+    }
+    Write-Output "vcredist140 x64 is installed with correct version: $x64Version."
+  register: vcredist_check_x64
+  failed_when: vcredist_check_x64.rc != 0
+
+- name: Check if vcredist140 x86 is installed and the version is correct
+  ansible.windows.win_shell: |
+    $x86Installed = Test-Path "HKLM:\SOFTWARE\WOW6432Node\Microsoft\VisualStudio\14.0\VC\Runtimes\x86"
+    if (-not $x86Installed) {
+        Write-Output "vcredist140 x86 is not installed"
+        exit 1
+    }
+    $x86Version = (Get-ItemProperty "HKLM:\SOFTWARE\WOW6432Node\Microsoft\VisualStudio\14.0\VC\Runtimes\x86").Version
+    if ($x86Version -notmatch "^v14\.\d+\.\d+(\.\d+)?") {
+        Write-Output "Incorrect version of vcredist140 x86 installed: $x86Version"
+        exit 1
+    }
+    Write-Output "vcredist140 x86 is installed with correct version: $x86Version."
+  register: vcredist_check_x86
+  failed_when: vcredist_check_x86.rc != 0
+
+- name: Download and install .NET Framework 4.8
+  ansible.windows.win_shell: |
+    try {
+      $url = (
+        "https://download.visualstudio.microsoft.com/download/pr/014120d7-d689-4305-befd-3cb711108212" +
+        "/0fd66638cde16859462a6243a4629a50/ndp48-x86-x64-allos-enu.exe"
+      )
+      $output = "$env:TEMP\ndp48-x86-x64-allos-enu.exe"
+      $expectedHash = "{{ dotnet_installer_checksum | default('') }}"
+      [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+
+      Invoke-WebRequest -Uri $url -OutFile $output -UseBasicParsing
+
+      # F-012 (POC-1586) — integrity check. Opt-in via dotnet_installer_checksum.
+      if ($expectedHash) {
+          $actualHash = (Get-FileHash -Algorithm SHA256 -Path $output).Hash.ToLower()
+          if ($actualHash -ne $expectedHash.ToLower()) {
+              Remove-Item -Path $output -Force
+              Write-Host "Checksum mismatch for $output. Expected $expectedHash, got $actualHash"
+              exit 1
+          }
+      }
+
+      $process = Start-Process -FilePath $output -ArgumentList "/quiet", "/norestart" -Wait -PassThru
+      $exitCode = $process.ExitCode
+
+      Write-Host "Installer exited with code: $exitCode"
+      Remove-Item -Path $output -Force
+      exit $exitCode
+    }
+    catch {
+      Write-Host "Installation failed: $($_.Exception.Message)"
+      exit 1
+    }
+  args:
+    executable: powershell
+  register: install_dotnet
+  failed_when: install_dotnet.rc not in [0, 3010]
+
+- name: Reboot host if required
+  ansible.windows.win_reboot:
+  when: >
+    (install_dotnet is defined and install_dotnet.rc == 3010) or
+    (install_vcredist_x64 is defined and install_vcredist_x64.rc == 3010) or
+    (install_vcredist_x86 is defined and install_vcredist_x86.rc == 3010) or
+    (reboot_check is defined and reboot_check.rc == 0)
+
+- name: Check if .NET Framework 4.8 is installed (32-bit)
+  ansible.windows.win_shell: |
+    $expected = 528049
+    $key = "HKLM:\SOFTWARE\WOW6432Node\Microsoft\NET Framework Setup\NDP\v4\Full"
+
+    if (-Not (Test-Path $key)) {
+      Write-Error ".NET Framework 32-bit not found"
+      exit 1
+    }
+
+    $value = (Get-ItemProperty -Path $key -Name Release).Release
+    if ($value -lt $expected) {
+      Write-Error ".NET Framework 32-bit version too low: $value"
+      exit 1
+    }
+
+    Write-Output ".NET Framework 32-bit is OK: $value"
+  args:
+    executable: powershell
+  register: dotnet86_check
+  failed_when: dotnet86_check.rc != 0
+
+- name: Check if .NET Framework 4.8 is installed (64-bit)
+  ansible.windows.win_shell: |
+    $expected = 528049
+    $key = "HKLM:\SOFTWARE\Microsoft\NET Framework Setup\NDP\v4\Full"
+
+    if (-Not (Test-Path $key)) {
+      Write-Error ".NET Framework 64-bit not found"
+      exit 1
+    }
+
+    $value = (Get-ItemProperty -Path $key -Name Release).Release
+    if ($value -lt $expected) {
+      Write-Error ".NET Framework 64-bit version too low: $value"
+      exit 1
+    }
+
+    Write-Output ".NET Framework 64-bit is OK: $value"
+  args:
+    executable: powershell
+  register: dotnet64_check
+  failed_when: dotnet64_check.rc != 0

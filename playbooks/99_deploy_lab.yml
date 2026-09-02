@@ -1,0 +1,28 @@
+---
+# ======================================================================
+# MASTER ORCHESTRATION PLAYBOOK: LAB DEPLOYMENT 
+# ======================================================================
+
+# Step 1: Provision VMs via Proxmox
+- import_playbook: 10_provision_proxmox_vms.yml
+
+# Step 2: Start all VMs
+- import_playbook: 11_start_vms.yml
+
+# Step 3: Configure Domain Controllers, DHCP, and PKI
+- import_playbook: 12_configure_ad_pki.yml
+
+# Step 4: Join Windows Component Nodes to Active Directory
+- import_playbook: 13_join_components_ad.yml
+
+# Step 5: Generate Certificates, Stage and Bind/Prepare Them
+- import_playbook: 14_deploy_certificates.yml
+
+# Step 6: Mount CyberArk Installation Binaries (ISO)
+- import_playbook: 20_deploy_files.yml
+
+# Step 7: Deploy CyberArk Component Prerequisites
+#- import_playbook: 21_deploy_pre-requirements.yml
+
+# Step 8: Final Validation Checks
+- import_playbook: 90_validate_lab.yml

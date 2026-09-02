@@ -1,0 +1,30 @@
+---
+# vars file for vault
+
+windows_installer_service_name: "Windows Modules Installer"
+vault_service_name: "PrivateArk Server"
+vault_notification_service_name: "Cyber-Ark Event Notification Engine"
+vault_database_service_name: "PrivateArk Database"
+vault_container_service_name: "CyberArk Logic Container"
+vaultdr_service_name: "CyberArk Vault Disaster Recovery"
+
+dotnet_installer_path: "C:\\ndp48-x86-x64-allos-enu.exe"
+vault_installationautomation_folder: "{{ vault_extract_folder }}\\InstallationAutomation"
+vault_install_log: "{{ vault_extract_folder }}\\Server\\setup.log"
+vaultdr_install_log: "{{ vault_extract_folder }}\\Disaster Recovery\\setup.log"
+vault_ita_log: "{{ vault_installation_path }}\\Server\\Logs\\italog.log"
+vault_hardening_log: "{{ vault_installationautomation_folder }}\\vault_hardening_result.txt"
+vault_activation_log: "{{ vault_installation_path }}\\Server\\Logs\\CAVaultManager.log"
+vault_configuration_log: "{{ vault_installation_path }}\\Server\\Logs\\VaultConfiguration.log"
+vault_db_log: "{{ vault_installation_path }}\\Server\\Database\\VaultDB.log"
+
+vault_exists: false
+vaultdr_exists: false
+
+ansible_stripped_password: '{{ ansible_password | regex_replace ("[^a-zA-Z0-9]", "") }}'
+vault_master_password: "{{ ansible_stripped_password }}"
+vault_admin_password: "{{ ansible_stripped_password }}"
+vault_dr_password: "{{ ansible_stripped_password }}"
+vault_secret: "{{ ansible_stripped_password }}"
+
+primary_enable_dr: false

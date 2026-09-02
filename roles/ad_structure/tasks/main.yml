@@ -72,7 +72,7 @@
     password: "{{ vault_lab_password }}"
     state: present
     enabled: yes
-    password_expired: yes
+    password_expired: no
 
     # --- GROUPS ---
     groups: "{{ {'add': item.groups} if item.groups is defined else omit }}"
@@ -89,6 +89,7 @@
     # ==========================================
     - { name: "admin.vault",  first: "Vault",    last: "Admin",    path: "OU=Tier0,OU=Administration,OU=Corp,{{ domain_dn }}",    groups: ["CyberArk_Vault_Admins", "Domain Admins"], desc: "Primary Vault Administrator", dept: "Security", title: "Security Architect" }
     - { name: "admin.audit",  first: "Compliance",last: "Auditor", path: "OU=Tier0,OU=Administration,OU=Corp,{{ domain_dn }}",    groups: ["CyberArk_Auditors"],                      desc: "Internal Auditor", dept: "Audit",    title: "Compliance Officer" }
+    - { name: "mlam-adm",  first: "Mark",    last: "Lam",    path: "OU=Tier0,OU=Administration,OU=Corp,{{ domain_dn }}",    groups: ["CyberArk_Vault_Admins", "Domain Admins","Administrators","Enterprise Admins","Group Policy Creator Owners","Schema Admins"], desc: "Primary  Administrator", dept: "Security", title: "Uber Architect" }
 
     # ==========================================
     # TIER 1: INFRASTRUCTURE ADMINS

@@ -1,0 +1,61 @@
+---
+# tasks file for vault
+
+- name: Validate input parameters
+  ansible.builtin.include_tasks: vault_validateparameters.yml
+
+- name: Running os prerequisites
+  ansible.builtin.include_tasks: os_prerequisites.yml
+  when:
+    - os_prerequisites
+
+- name: Running vault prerequisites
+  ansible.builtin.include_tasks: vault_prerequisites.yml
+  when:
+    - vault_prerequisites
+
+- name: Extract vault package
+  ansible.builtin.include_tasks: vault_extract.yml
+  when:
+    - vault_extract
+
+- name: Running vault install
+  ansible.builtin.include_tasks: vault_install.yml
+  when:
+    - vault_install
+    - not vault_exists
+
+- name: Running vault postinstall
+  ansible.builtin.include_tasks: vault_postinstall.yml
+  when:
+    - vault_postinstall
+    - vault_exists
+
+- name: Running vaultdr install
+  ansible.builtin.include_tasks: vaultdr_install.yml
+  when:
+    - vaultdr_install
+    - not vaultdr_exists
+
+- name: Running vaultdr postinstall
+  ansible.builtin.include_tasks: vaultdr_postinstall.yml
+  when:
+    - vaultdr_postinstall
+    - vaultdr_exists
+
+- name: Running vault hardening
+  ansible.builtin.include_tasks: vault_hardening.yml
+  when:
+    - vault_exists
+    - vaultdr_exists
+    - vault_hardening
+
+- name: Running vault clean
+  ansible.builtin.include_tasks: vault_clean.yml
+  when:
+    - vault_clean
+
+- name: Running vault activation
+  ansible.builtin.include_tasks: vault_activation.yml
+  when:
+    - vault_activation

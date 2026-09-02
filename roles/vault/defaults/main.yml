@@ -1,0 +1,52 @@
+---
+# defaults file for vault
+platform: "aws"
+
+vault_zip_file_name: "vault.zip"
+vaultdr_zip_file_name: "vaultdr.zip"
+pacli_zip_file_name: "pacli.zip"
+recpub_file_name: "recpub.key"
+license_file_name: "license.xml"
+
+vault_extract: false
+vault_prerequisites: false
+vault_install: false
+vault_postinstall: false
+vaultdr_install: false
+vaultdr_postinstall: false
+vault_hardening: false
+vault_clean: false
+vault_activation: false
+
+vault_base_bin_drive: "C:"
+safes_data_drive: "{{ data_drive_letter }}:"
+vault_installation_drive: "C:"
+vault_installation_path: "{{ vault_installation_drive }}\\Program Files (x86)\\PrivateArk"
+vault_extract_folder: "{{ vault_base_bin_drive }}\\Cyberark\\packages"
+vault_component_folder: "Server"
+vaultdr_component_folder: "Disaster Recovery"
+pacli_component_folder: "PACLI"
+keys_folder: "{{ vault_base_bin_drive }}\\Keys"
+vault_artifact_name: "vault.zip"
+vaultdr_artifact_name: "vaultdr.zip"
+pacli_artifact_name: "pacli.zip"
+vault_role: "primary"
+vault_primary_ip: "1.1.1.1"
+cloud_region: "us-east-1"
+
+safes_disk_number: 1
+
+enable_winrm: "no"
+accept_eula: "No"
+log_path_dest: "{{ playbook_dir | dirname }}/logs/vault"
+
+# F-012 (POC-1586) — SHA-256 checksums for build-time prerequisite downloads.
+# Leave empty to skip verification (backwards-compatible default). Set to the
+# Microsoft-published SHA-256 values to harden downloads against tampering.
+# Example:
+#   vcredist_x86_checksum:       "<sha256 for vc_redist.x86.exe>"
+#   vcredist_x64_checksum:       "<sha256 for vc_redist.x64.exe>"
+#   dotnet_installer_checksum:   "<sha256 for ndp48-x86-x64-allos-enu.exe>"
+vcredist_x86_checksum: ""
+vcredist_x64_checksum: ""
+dotnet_installer_checksum: ""

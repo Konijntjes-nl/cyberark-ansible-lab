@@ -33,6 +33,18 @@
     certutil -setreg 'CA\CRLPeriodUnits' 1
     certutil -setreg 'CA\CRLPeriod' 'Years'
     certutil -setreg 'CA\CRLDeltaPeriodUnits' 0
+    
+    # Configure HTTP CDP Extension 
+    # Flag 10 = Include in CDP of issued certs (2) + Include in CRLs to find Delta (8)
+    $ExtensionPath = "HKLM:\SYSTEM\CurrentControlSet\Services\CertSvc\Configuration\$CAName\Extension"
+    $CurrentCDP = (Get-ItemProperty -Path $ExtensionPath -Name CRLPublicationURLs).CRLPublicationURLs
+    $HttpCDP = "10:http://pki.lab.cybermark.tech/CertEnroll/%3%8%9.crl"
+    
+    if ($CurrentCDP -notcontains $HttpCDP) {
+        Set-ItemProperty -Path $ExtensionPath -Name CRLPublicationURLs -Value ($CurrentCDP + $HttpCDP)
+        Restart-Service CertSvc
+        certutil -crl
+    }
   # --- ORIGINAL LOGIC RESTORED: BECOME DOMAIN ADMIN ---
   become: yes
   become_method: runas

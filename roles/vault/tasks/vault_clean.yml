@@ -1,0 +1,150 @@
+---
+# tasks file for vault_clean
+
+- name: Remove auto.cnf of mysql to generalize server_uuid
+  ansible.windows.win_file:
+    path: "{{ safes_data_drive }}\\PrivateArk\\Safes\\Metadata\\auto.cnf"
+    state: absent
+
+- name: Find Log files
+  ansible.windows.win_find:
+    paths:
+      - "{{ vault_installation_path }}\\Server"
+      - "{{ vault_installation_path }}\\Server\\Conf"
+      - "{{ vault_installation_path }}\\Server\\Logs"
+      - "{{ vault_installation_path }}\\PADR"
+    patterns: ['*.log', '*.good', '*.old', 'trace*.*']
+  register: server_files
+
+- name: Remove log files
+  ansible.windows.win_file:
+    path: "{{ item.path }}"
+    state: absent
+  with_items: "{{ server_files.files }}"
+
+- name: Find archive files
+  ansible.windows.win_find:
+    paths:
+      - "{{ vault_installation_path }}\\Server\\Logs\\Archive"
+    patterns: ['*']
+  register: archive_files
+
+- name: Remove archive files
+  ansible.windows.win_file:
+    path: "{{ item.path }}"
+    state: absent
+  with_items: "{{ archive_files.files }}"
+
+- name: Clean italog file
+  ansible.windows.win_file:
+    path: "{{ vault_ita_log }}"
+    state: absent
+
+- name: Create empty italog file
+  ansible.windows.win_copy:
+    content: ""
+    dest: "{{ vault_ita_log }}"
+    force: false
+
+- name: Remove Cyberark Directory
+  ansible.windows.win_file:
+    path: "{{ vault_base_bin_drive }}\\Cyberark"
+    state: absent
+
+- name: Remove all firewall rules with group different than cyberark
+  ansible.windows.win_shell: |
+   try {
+       Get-NetFirewallRule -All |
+       Where-Object { $_.Group -NotMatch 'CYBERARK'} |
+       ForEach-Object {
+           Write-Output "$($_.Name)"
+           Remove-NetFirewallRule -Name "$($_.Name)"
+       }
+       Write-Output "Altered Windows Firewall Rules Successfully"
+   } catch {
+       Write-Output "Error occured: $error"
+       throw $_
+   }
+
+- name: Move expired license file
+  ansible.windows.win_copy:
+    src: "../files/License.old.xml"
+    dest: "C:\\Program Files (x86)\\PrivateArk\\Server\\Conf\\License.xml"
+
+- name: Delete good license file
+  ansible.windows.win_file:
+    path: "C:\\Keys\\License.xml"
+    state: absent
+
+- name: Verify that PrivateArk Server service is not able to start anymore
+  ansible.windows.win_service:
+    name: "PrivateArk Server"
+    state: started
+    force_dependent_services: true
+  register: service_result
+  failed_when: "'changed' in service_result.msg or 'ok' in service_result.msg"
+
+- name: Remove WinRM access Lines from dbparm ini
+  community.windows.win_lineinfile:
+    path: "{{ vault_installation_path }}\\Server\\Conf\\dbparm.ini"
+    regexp: '^(.*?(\bYes,5986:outbound\b)[^$]*)$'
+    state: absent
+  when: enable_winrm != "yes"
+
+- name: Create Deployment Folders
+  ansible.windows.win_file:
+    path: "{{ item }}"
+    state: directory
+  with_items:
+    - "C:\\CyberArk"
+    - "C:\\CyberArk\\Deployment"
+    - "C:\\CyberArk\\Deployment\\Logs"
+
+- name: Check if Amazon CloudWatch Agent is already installed
+  ansible.windows.win_stat:
+    path: "C:\\Program Files\\Amazon\\AmazonCloudWatchAgent\\amazon-cloudwatch-agent-ctl.ps1"
+  register: cwa_stat
+  when: platform == 'aws'
+
+- name: Download Amazon CloudWatch Agent installer
+  ansible.windows.win_get_url:
+    url: https://s3.amazonaws.com/amazoncloudwatch-agent/windows/amd64/latest/amazon-cloudwatch-agent.msi
+    dest: C:\Windows\Temp\amazon-cloudwatch-agent.msi
+  when:
+    - platform == 'aws'
+    - not cwa_stat.stat.exists
+
+- name: Install Amazon CloudWatch Agent
+  ansible.windows.win_package:
+    path: C:\Windows\Temp\amazon-cloudwatch-agent.msi
+    state: present
+    arguments: /quiet
+  when:
+    - platform == 'aws'
+    - not cwa_stat.stat.exists
+
+- name: Copy PS1 scripts - AWS
+  ansible.windows.win_copy:
+    src: "files/aws/{{ item }}"
+    dest: C:\CyberArk\Deployment\
+  with_items:
+    - VaultInit.ps1
+    - VaultPostInstall.ps1
+    - UserDataScript.ps1
+    - VaultTagKMS.ps1
+    - CloudWatch.ps1
+    - Common.ps1
+    - AllowDR.ps1
+    - amazon-cloudwatch-agent.json
+  when: platform == 'aws'
+
+- name: Copy PS1 scripts - Azure
+  ansible.windows.win_copy:
+    src: files/azure/{{ item }}
+    dest: C:\CyberArk\
+  with_items:
+    - HardeningActivation.ps1
+    - Common.ps1
+    - HardenAzureFW.ps1
+  when: platform == 'azure'
+

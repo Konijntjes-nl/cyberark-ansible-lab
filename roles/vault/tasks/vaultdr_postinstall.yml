@@ -1,0 +1,14 @@
+---
+
+- name: Make sure FailoverMode is No on PADR ini
+  community.windows.win_lineinfile:
+    dest: "{{ vault_installation_path }}\\PADR\\Conf\\PADR.ini"
+    line: "FailoverMode=No"
+    regexp: '^FailoverMode='
+
+- name: Set CyberArk Vault Disaster Recovery Service Startup Mode to Manual
+  ansible.windows.win_service:
+    name: "{{ vaultdr_service_name }}"
+    start_mode: manual
+    state: stopped
+    force_dependent_services: true

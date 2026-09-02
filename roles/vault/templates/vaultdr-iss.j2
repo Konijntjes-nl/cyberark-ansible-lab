@@ -1,0 +1,37 @@
+[InstallShield Silent]
+Version=v7.00
+File=Response File
+[File Transfer]
+OverwrittenReadOnly=NoToAll
+[{35FBBFA5-A444-4A2B-BC18-5F8431B4CCAC}-DlgOrder]
+Dlg0={35FBBFA5-A444-4A2B-BC18-5F8431B4CCAC}-SdWelcome-0
+Count=6
+Dlg1={35FBBFA5-A444-4A2B-BC18-5F8431B4CCAC}-SdLicense-0
+Dlg2={35FBBFA5-A444-4A2B-BC18-5F8431B4CCAC}-SdRegisterUser-0
+Dlg3={35FBBFA5-A444-4A2B-BC18-5F8431B4CCAC}-SdAskDestPath-0
+Dlg4={35FBBFA5-A444-4A2B-BC18-5F8431B4CCAC}-USER_DR_DIALOG-0
+Dlg5={35FBBFA5-A444-4A2B-BC18-5F8431B4CCAC}-SdFinishReboot-0
+[{35FBBFA5-A444-4A2B-BC18-5F8431B4CCAC}-SdWelcome-0]
+Result=1
+[{35FBBFA5-A444-4A2B-BC18-5F8431B4CCAC}-SdLicense-0]
+Result=1
+[{35FBBFA5-A444-4A2B-BC18-5F8431B4CCAC}-SdRegisterUser-0]
+szName=CyberArk DR Vault Image
+szCompany=CyberArk
+Result=1
+[{35FBBFA5-A444-4A2B-BC18-5F8431B4CCAC}-SdAskDestPath-0]
+szDir={{ vault_installation_path }}
+Result=1
+[{35FBBFA5-A444-4A2B-BC18-5F8431B4CCAC}-USER_DR_DIALOG-0]
+DRUserName=DR
+DRUserPass={{ ansible_stripped_password }}
+MasterVaultAddress=127.0.0.1
+MasterVaultPort=1858
+[Application]
+Name=CyberArk Vault Disaster Recovery 13.0
+Version=13.0.0.64
+Company=CyberArk
+Lang=0409
+[{35FBBFA5-A444-4A2B-BC18-5F8431B4CCAC}-SdFinishReboot-0]
+Result=1
+BootOption=0

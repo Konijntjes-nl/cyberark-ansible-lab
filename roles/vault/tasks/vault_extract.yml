@@ -1,0 +1,134 @@
+---
+# tasks file for vault_extract
+
+- name: Create extract folder
+  ansible.windows.win_file:
+    path: "{{ vault_extract_folder }}"
+    state: directory
+
+- name: Create InstallationAutomation folder
+  ansible.windows.win_file:
+    path: "{{ vault_installationautomation_folder }}"
+    state: directory
+
+- name: Copy Vault package from local source
+  ansible.windows.win_copy:
+    src: "{{ zips_path }}/{{ vault_zip_file_name }}"
+    dest: "{{ vault_extract_folder }}\\{{ vault_artifact_name }}"
+  register: st
+
+- name: Check if Vault package exists in path
+  ansible.builtin.fail:
+    msg: "{{ zips_path }}/{{ vault_zip_file_name }} not exists, failing..."
+  when: not st.checksum
+
+- name: Copy VaultDR package from local source
+  ansible.windows.win_copy:
+    src: "{{ zips_path }}/{{ vaultdr_zip_file_name }}"
+    dest: "{{ vault_extract_folder }}\\{{ vaultdr_artifact_name }}"
+  register: stdr
+
+- name: Check if VaultDR package exists in path
+  ansible.builtin.fail:
+    msg: "{{ zips_path }}/{{ vaultdr_zip_file_name }} not exists, failing..."
+  when: not stdr.checksum
+
+- name: Copy InstallationAutomation Scripts
+  ansible.windows.win_copy:
+    src: ../files/InstallationAutomation/
+    dest: "{{ vault_installationautomation_folder }}"
+
+- name: Create Keys folder
+  ansible.windows.win_file:
+    path: "{{ keys_folder }}"
+    state: directory
+
+- name: Install Redistributable C++ for PAKeyGen
+  ansible.windows.win_command: |
+    vcredist_x86.exe /q /norestart
+  args:
+    chdir: "{{ vault_installationautomation_folder }}\\Binaries"
+
+- name: Run PAKeyGen to generate keys
+  ansible.windows.win_command: |
+    PAKeyGen.exe AES-256 RSA-2048 . /d
+  args:
+    chdir: "{{ vault_installationautomation_folder }}\\PAKeyGen"
+  register: pakeygen
+  ignore_errors: true
+
+- name: Fail if there is an error
+  ansible.builtin.fail:
+    msg: "PAKEYGEN operation failed. log: {{ pakeygen.stdout }}"
+  when:
+    - "'PAKEYGEN completed successfully' not in pakeygen.stdout"
+    - "'Directory already exists' not in pakeygen.stdout"
+
+- name: Uninstall Redistributable C++
+  ansible.windows.win_command: |
+    vcredist_x86.exe /q /uninstall
+  args:
+    chdir: "{{ vault_installationautomation_folder }}\\Binaries"
+
+- name: Copy keys to folder
+  ansible.windows.win_copy:
+    src: "{{ vault_installationautomation_folder }}\\PAKeyGen\\master\\"
+    dest: "{{ keys_folder }}\\"
+    remote_src: true
+
+- name: Copy recpub from local source
+  ansible.windows.win_copy:
+    src: "{{ keys_dir_path }}/keys/{{ recpub_file_name }}"
+    dest: "{{ vault_base_bin_drive }}\\"
+  register: strcp
+
+- name: Verify recpub exists in path
+  ansible.builtin.fail:
+    msg: "{{ keys_dir_path }}/keys/{{ recpub_file_name }} not exists, failing..."
+  when: not strcp.checksum
+
+- name: Copy license from local source
+  ansible.windows.win_copy:
+    src: "{{ keys_dir_path }}/keys/{{ license_file_name }}"
+    dest: "{{ keys_folder }}\\"
+  register: stlc
+
+- name: Verify license exists in path
+  ansible.builtin.fail:
+    msg: "{{ keys_dir_path }}/keys/{{ license_file_name }} not exists, failing..."
+  when: not stlc.checksum
+
+- name: Copy Pacli package from local source
+  ansible.windows.win_copy:
+    src: "{{ zips_path }}/{{ pacli_zip_file_name }}"
+    dest: "{{ vault_extract_folder }}\\{{ pacli_artifact_name }}"
+  register: stpa
+
+- name: Verify Pacli package exists in path
+  ansible.builtin.fail:
+    msg: "{{ zips_path }}/{{ pacli_zip_file_name }} not exists, failing..."
+  when: not stpa.checksum
+
+- name: Create components folder
+  ansible.windows.win_file:
+    path: "{{ vault_extract_folder }}\\{{ item }}"
+    state: directory
+  with_items:
+    - "{{ vault_component_folder }}"
+    - "{{ vaultdr_component_folder }}"
+    - "{{ pacli_component_folder }}"
+
+- name: Unzip the vault package
+  community.windows.win_unzip:
+    src: "{{ vault_extract_folder }}\\{{ vault_artifact_name }}"
+    dest: "{{ vault_extract_folder }}\\{{ vault_component_folder }}"
+
+- name: Unzip the vaultdr package
+  community.windows.win_unzip:
+    src: "{{ vault_extract_folder }}\\{{ vaultdr_artifact_name }}"
+    dest: "{{ vault_extract_folder }}\\{{ vaultdr_component_folder }}"
+
+- name: Unzip the pacli package
+  community.windows.win_unzip:
+    src: "{{ vault_extract_folder }}\\{{ pacli_artifact_name }}"
+    dest: "{{ vault_extract_folder }}\\{{ pacli_component_folder }}"

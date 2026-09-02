@@ -1,0 +1,17 @@
+CustomerId=CyberArk
+VaultType=NV
+LicenseVersion=4.0.133.0
+LicenseExpdt=never
+LicensedUsers=-1
+IgnoreDisabledUsers=Yes
+EnableFileStorage=Yes
+EnablePasswordStorage=Yes
+LicensedClients=All
+LicensedAuthenticationTypes=All
+Enable3rdPartyBackup=Yes
+EnableRemoteControl=Yes
+EnableSNMP=Yes
+EnableDR=Yes
+EnableLDAP=Yes
+EnableHACluster=Yes
+LicenseKey=2D6C087A5454D988C7A86124BAABFF35CDD010B4

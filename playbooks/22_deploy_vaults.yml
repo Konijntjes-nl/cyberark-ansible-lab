@@ -1,52 +1,66 @@
 ---
 - name: Map custom IP variable to ansible_host
-  hosts: cyberark_components
+  hosts: vault
   gather_facts: false
   tasks:
     - name: Set ansible_host for WinRM connections
       set_fact:
         ansible_host: "{{ ip }}"
 
-- name: Deploy Password Vault Web Access (PVWA)
-  hosts: pvwa
+# ======================================================================
+# DEPLOY PRIMARY VAULT
+# ======================================================================
+- name: Deploy CyberArk Primary Vault
+  hosts: vault-01
   gather_facts: yes
-  roles:
-    - role: pvwa
-      vars:
-        pvwa_extract: true
-        pvwa_ignore_checksum: true
-        pvwa_prerequisites: true
-        pvwa_install: true
-        pvwa_hardening: true
-        pvwa_registration: true
-        pvwa_clean: true
+  pre_tasks:
+    - name: "Get CD-ROM Drive Letter"
+      ansible.windows.win_shell:
+        cmd: |
+          (Get-Volume | Where-Object { $_.DriveType -eq 'CD-ROM' -and $_.FileSystemLabel -notmatch 'cidata' -and $_.FileSystemLabel -ne $null } | Select-Object -First 1).DriveLetter
+      register: cdrom
+      changed_when: false
+      
+    - name: "Set ISO Path Fact"
+      set_fact:
+        iso_drive: "{{ cdrom.stdout | trim }}:\\"
 
-- name: Deploy Central Policy Manager (CPM)
-  hosts: cpm
-  gather_facts: yes
-  serial: 1
-  roles:
-    - role: cpm
-      vars:
-        cpm_extract: true
-        cpm_ignore_checksum: true
-        cpm_prerequisites: true
-        cpm_install: true
-        cpm_hardening: true
-        cpm_registration: true
-        cpm_clean: true
+    - name: "Create default packages directory"
+      ansible.windows.win_file:
+        path: "C:\\Cyberark\\packages\\Vault"
+        state: directory
 
-- name: Deploy Privileged Session Manager (PSM)
-  hosts: psm
-  gather_facts: yes
+    - name: "Stage Vault files from read-only ISO to local disk"
+      ansible.windows.win_copy:
+        # Note: Verify the exact folder name on your ISO. It is usually "PrivateArk Server" or "Server"
+        src: "{{ iso_drive }}PrivateArk Server\\" 
+        dest: "C:\\Cyberark\\packages\\Vault\\"
+        remote_src: yes
+
+    - name: "Remove Read-Only attribute from staged files"
+      ansible.windows.win_shell: |
+        Get-ChildItem -Path "C:\Cyberark\packages\Vault" -Recurse | Where-Object { $_.IsReadOnly } | ForEach-Object { $_.IsReadOnly = $false }
+
   roles:
-    - role: psm
+    - role: vault
       vars:
-        psm_extract: true
-        psm_ignore_checksum: true
-        psm_prerequisites: true
-        psm_install: true
-        psm_postinstall: true
-        psm_hardening: true
-        psm_registration: true
-        psm_clean: true
+        # Disable file extraction since we staged them manually
+        vault_extract: false
+        vault_ignore_checksum: true
+        
+        # Enable installation phases
+        vault_prerequisites: true
+        vault_install: true
+        vault_postinstall: true
+        vault_hardening: true
+        
+        # Architecture configuration
+        is_primary_vault: true
+        
+        # Installation Paths
+        vault_installation_folder: "C:\\Cyberark\\packages\\Vault\\Server-Rls-v15.2"
+        vault_installation_automation_folder: "C:\\Cyberark\\packages\\Vault\\Server-Rls-v15.2\\InstallationAutomation"
+        
+        # Passwords (Ideally pull these from your vault_lab_password variable)
+        vault_admin_password: "YourStrongAdminPassword123!"
+        vault_master_password: "YourStrongMasterPassword123!"

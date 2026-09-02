@@ -1,0 +1,257 @@
+---
+# tasks file for vault_postinstall
+
+- name: Copy pacli directory
+  ansible.windows.win_copy:
+    src: "{{ vault_extract_folder }}\\{{ pacli_component_folder }}"
+    dest: "{{ vault_installation_path }}\\Server\\"
+    remote_src: true
+
+- name: Change DR Password
+  ansible.windows.win_shell: |
+    .\pacli.exe init
+    .\pacli.exe define vault=v address=127.0.0.1
+    .\pacli.exe default vault=v user=administrator
+    .\pacli.exe logon password={{ ansible_stripped_password }}
+    .\pacli.exe updateuser destuser=DR disabled=NO
+    .\pacli.exe logoff
+    .\pacli.exe term
+  args:
+    chdir: "{{ vault_installation_path }}\\Server\\PACLI\\"
+  register: dr_password_result
+  failed_when: dr_password_result.rc != 0
+  ignore_errors: false
+  
+- name: Adjust permissions
+  ansible.windows.win_acl:
+    path: "{{ item }}"
+    user: Users
+    rights: FullControl
+    type: allow
+    state: present
+    inherit: ContainerInherit, ObjectInherit
+    propagation: 'None'
+  with_items:
+    - "{{ vault_installation_path }}\\Server\\PACLI\\"
+    - "{{ vault_installation_path }}\\Server\\Database\\my.ini"
+    - "{{ safes_data_drive }}\\PrivateArk\\Safes\\Metadata\\auto.cnf"
+
+- name: Create Scripts Directory
+  ansible.windows.win_file:
+    path: "{{ vault_installation_path }}\\Server\\Scripts"
+    state: directory
+
+- name: Copy the update InnoDB script to place
+  ansible.windows.win_template:
+    src: templates/updateinnodb.j2
+    dest: "{{ vault_installation_path }}\\Server\\Scripts\\UpdateInnodbBufferPoolSizeInINI.ps1"
+
+- name: Set Windows Modules Installer Service Startup Mode to Manual and Ensure It Is Started
+  ansible.windows.win_service:
+    name: "{{ windows_installer_service_name }}"
+    start_mode: manual
+    state: started
+    force_dependent_services: true
+
+- name: Set PrivateArk Server Service Startup Mode to Manual
+  ansible.windows.win_service:
+    name: "{{ vault_service_name }}"
+    start_mode: manual
+    state: stopped
+    force_dependent_services: true
+
+- name: Set Event Notification Engine Service Startup Mode to Manual
+  ansible.windows.win_service:
+    name: "{{ vault_notification_service_name }}"
+    start_mode: manual
+    state: stopped
+    force_dependent_services: true
+
+- name: Set CyberArk Logic Container Service Startup Mode to Manual
+  ansible.windows.win_service:
+    name: "{{ vault_container_service_name }}"
+    start_mode: manual
+    state: stopped
+    force_dependent_services: true
+
+- name: Set PrivateArk Database Service Startup Mode to automatic and stopped
+  ansible.windows.win_service:
+    name: "{{ vault_database_service_name }}"
+    start_mode: auto
+    state: stopped
+    force_dependent_services: true
+
+# Create a task to Update the InnoDB Buffer Pool Size in Vault INI
+
+- name: Create a task to Update the InnoDB Buffer Pool Size in Vault INI
+  community.windows.win_scheduled_task:
+    name: Update InnoDB Buffer Pool Size in Vault INI
+    description: Update InnoDB Buffer Pool Size in Vault INI
+    actions:
+      - path: C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe
+        arguments: >
+          -ExecutionPolicy Bypass ^
+          -File "{{ vault_installation_path }}\\Server\\Scripts\\UpdateInnodbBufferPoolSizeInINI.ps1" >> "%TEMP%\StartupLog.txt" 2>&1
+    state: present
+    enabled: true
+    username: SYSTEM
+    runlevel: highest
+    triggers:
+      - type: boot
+
+- name: Check if vault service created successfully
+  ansible.windows.win_service:
+    name: "{{ vault_service_name }}"
+  register: vault_service_info
+
+- name: Fail is service is still running
+  ansible.builtin.fail:
+    msg: "Vault Service is not stopped"
+  when: vault_service_info.state == "running"
+
+- name: Set Vault service info as fact
+  ansible.builtin.set_fact:
+    vault_exists: "{{ vault_service_info.exists }}"
+
+- name: Copy Registry File
+  ansible.windows.win_copy:
+    src: "files/InstallationAutomation/EnableTLS_1_2.reg"
+    dest: "{{ vault_installation_path }}\\Server\\EnableTLS_1_2.reg"
+
+- name: Enable TLS 1.2 and Cyphers
+  ansible.windows.win_shell: |
+    reg import EnableTLS_1_2.reg
+  args:
+    executable: cmd
+    chdir: "C:\\Program Files (x86)\\PrivateArk\\Server"
+
+- name: Add neccesary access Lines to dbparm ini
+  community.windows.win_lineinfile:
+    path: "{{ vault_installation_path }}\\Server\\Conf\\dbparm.ini"
+    line: "{{ item }}"
+  with_items:
+    - "AllowNonStandardFWAddresses=[1.1.1.1-255.255.255.255],Yes,5986:outbound/tcp,5986:inbound/tcp"
+    - "AllowNonStandardFWAddresses=[1.1.1.1-255.255.255.255],Yes,443:outbound/tcp"
+    - "AllowNonStandardFWAddresses=[1.1.1.1-255.255.255.255],Yes,3389:outbound/udp,3389:inbound/udp"
+    - "AllowNonStandardFWAddresses=[1.1.1.1-255.255.255.255],Yes,3389:outbound/tcp,3389:inbound/tcp"
+
+- name: Add AWS access Lines to dbparm ini
+  community.windows.win_lineinfile:
+    path: "{{ vault_installation_path }}\\Server\\Conf\\dbparm.ini"
+    line: "{{ item }}"
+  with_items:
+    - "AllowNonStandardFWAddresses=[1.1.1.1-255.255.255.255],Yes,53:outbound/tcp"
+    - "AllowNonStandardFWAddresses=[1.1.1.1-255.255.255.255],Yes,53:outbound/udp"
+    - "AllowNonStandardFWAddresses=[169.254.169.250,169.254.169.251,169.254.169.254],Yes,80:outbound/tcp,80:inbound/tcp"
+    - "AllowNonStandardFWAddresses=[169.254.169.250,169.254.169.251],Yes,1688:outbound/tcp"
+    - "AllowNonStandardFWAddresses=[1.1.1.1-255.255.255.255],Yes,67:outbound/tcp"
+    - "AllowNonStandardFWAddresses=[169.254.169.123],Yes,123:outbound/udp"
+  when: platform == "aws"
+
+- name: Add Azure access Lines to dbparm ini
+  community.windows.win_lineinfile:
+    path: "{{ vault_installation_path }}\\Server\\Conf\\dbparm.ini"
+    line: "{{ item }}"
+  with_items:
+    - "AllowNonStandardFWAddresses=[168.63.129.16],Yes,53:outbound/tcp"
+    - "AllowNonStandardFWAddresses=[168.63.129.16],Yes,53:outbound/udp"
+    - "AllowNonStandardFWAddresses=[168.63.129.16],Yes,32526:outbound/tcp"
+    - "AllowNonStandardFWAddresses=[168.63.129.16,169.254.169.254],Yes,80:outbound/tcp"
+    - "AllowNonStandardFWAddresses=[23.102.135.246],Yes,1688:outbound/tcp"
+  when: platform == "azure"
+
+# Stop and Start PrivateArk Server to apply rules
+
+- name: Stop PrivateArk Server Service
+  ansible.windows.win_service:
+    name: "{{ vault_service_name }}"
+    state: stopped
+    force_dependent_services: true
+
+- name: Start PrivateArk Server Service
+  ansible.windows.win_service:
+    name: "{{ vault_service_name }}"
+    state: started
+    force_dependent_services: true
+
+# Stop the PrivateArk Server before Hardening
+
+- name: Stop PrivateArk Server Service
+  ansible.windows.win_service:
+    name: "{{ vault_service_name }}"
+    state: stopped
+    force_dependent_services: true
+
+- name: Disable Windows FilterAdministratorToken Hardening - Win2019
+  community.windows.win_lineinfile:
+    dest: "{{ vault_installation_path }}\\Server\\Hardening\\Conf\\Windows2019Security.inf"
+    regexp: '^MACHINE\\Software\\Microsoft\\Windows\\CurrentVersion\\Policies\\System\\FilterAdministratorToken'
+    state: absent
+  when: platform == "aws"
+
+- name: Disable Windows FilterAdministratorToken Hardening - Win2022
+  community.windows.win_lineinfile:
+    dest: "{{ vault_installation_path }}\\Server\\Hardening\\Conf\\Windows2022Security.inf"
+    regexp: '^MACHINE\\Software\\Microsoft\\Windows\\CurrentVersion\\Policies\\System\\FilterAdministratorToken'
+    state: absent
+  when: platform == "aws"
+
+- name: Disable Windows FilterAdministratorToken Hardening - Win2025
+  community.windows.win_lineinfile:
+    dest: "{{ vault_installation_path }}\\Server\\Hardening\\Conf\\Windows2025Security.inf"
+    regexp: '^MACHINE\\Software\\Microsoft\\Windows\\CurrentVersion\\Policies\\System\\FilterAdministratorToken'
+    state: absent
+  when: platform == "aws"
+
+- name: Create a task to set Network Profile Private
+  community.windows.win_scheduled_task:
+    name: SetNetworkAsPrivateProfile
+    description: Set Network Profile Private
+    actions:
+      - path: C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe
+        arguments: -Command "Set-NetConnectionProfile -NetWorkCategory Private"
+    state: present
+    enabled: true
+    username: SYSTEM
+    runlevel: highest
+    triggers:
+      - type: boot
+        delay: PT10S
+
+- name: Create a runOnce task to disable TrustedInstaller services
+  community.windows.win_scheduled_task:
+    name: DisableTrustedInstaller
+    description: "Disables TrustedInstaller service, then removes itself"
+    actions:
+      - path: C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe
+        arguments: -Command "
+          Stop-Service -Name TrustedInstaller -Force;
+          Set-Service -Name TrustedInstaller -StartupType Disabled;
+          Unregister-ScheduledTask -TaskName 'DisableTrustedInstaller' -Confirm:$false"
+    state: present
+    enabled: true
+    username: SYSTEM
+    runlevel: highest
+    triggers:
+      - type: boot
+        delay: PT10S
+  when: platform == "aws"
+
+- name: Create a runOnce task to disable LanmanWorkstation service
+  community.windows.win_scheduled_task:
+    name: DisableLanmanWorkstation
+    description: "Disables LanmanWorkstation service, then removes itself"
+    actions:
+      - path: C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe
+        arguments: -Command "
+          Stop-Service -Name LanmanWorkstation -Force;
+          Set-Service -Name LanmanWorkstation -StartupType Disabled;
+          Unregister-ScheduledTask -TaskName 'DisableLanmanWorkstation' -Confirm:$false"
+    state: present
+    enabled: true
+    username: SYSTEM
+    runlevel: highest
+    triggers:
+      - type: boot
+        delay: PT1H
+  when: platform == "aws"

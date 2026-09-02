@@ -118,7 +118,9 @@
                   & certreq.exe -submit -q -f -attrib "CertificateTemplate:CyberArkWebServer" -config "$CaConfig" "$ReqPath" "$CerPath"
                   & certreq.exe -accept -machine -q -f "$CerPath"
                   
-                  $InstalledCert = Get-ChildItem Cert:\LocalMachine\My | Where-Object { $_.Subject -match "CN=$($cert.Name)\." } | Sort-Object NotBefore -Descending | Select-Object -First 1
+                  # Fixed Matching Logic: Escapes the dot characters in the exact Subject string
+                  $MatchSubject = $cert.Subject -replace '\.', '\.'
+                  $InstalledCert = Get-ChildItem Cert:\LocalMachine\My | Where-Object { $_.Subject -match $MatchSubject } | Sort-Object NotBefore -Descending | Select-Object -First 1
                   if ($InstalledCert) {
                       Export-PfxCertificate -Cert $InstalledCert -FilePath $PfxPath -Password $Password | Out-Null
                   }

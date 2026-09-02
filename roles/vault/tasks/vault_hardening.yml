@@ -1,0 +1,61 @@
+---
+# tasks file for vault_hardening
+
+- name: Create directory for Hardening Logs
+  ansible.windows.win_file:
+    path: "{{ vault_installation_path }}\\Server\\Hardening\\Logs"
+    state: directory
+
+- name: Hardening Block
+  block:
+
+    - name: Run Vault Hardening
+      ansible.windows.win_shell: |
+        .\CAVaultHarden.exe Aws Logs /AllowRDP 10.10.10.10 | Out-File "{{ vault_hardening_log }}"
+      args:
+        chdir: "{{ vault_installation_path }}\\Server\\Hardening\\"
+
+    - name: Query Hardening Log to verify hardening steps happened
+      community.windows.win_lineinfile:
+        dest: "{{ vault_hardening_log }}"
+        regexp: "{{ item }}"
+        state: absent
+      check_mode: true
+      register: presence
+      failed_when: not presence.changed
+      with_items:
+        - "Windows Network Devices successfully hardened."
+        - "Windows Group Policy successfully hardened."
+        - "Windows Local users successfully hardened."
+        - "Windows Audit policy successfully hardened."
+        - "Windows Services successfully hardened."
+        - "Windows Registry successfully hardened."
+
+    - name: Query Hardening Log to verify hardening completed successfully
+      community.windows.win_lineinfile:
+        dest: "{{ vault_hardening_log }}"
+        regexp: "{{ item }}"
+        state: absent
+      check_mode: true
+      register: presence
+      failed_when: not presence.changed
+      with_items:
+        - "Hardening process was completed successfully!"
+
+    - name: Fetch vault hardening log
+      ansible.builtin.fetch:
+        src: '{{ vault_hardening_log }}'
+        dest: '{{ log_path_dest }}/vault_hardening.log'
+        flat: true
+
+  rescue:
+
+    - name: Rescue - Fetch vault hardening log
+      ansible.builtin.fetch:
+        src: '{{ vault_hardening_log }}'
+        dest: '{{ log_path_dest }}/vault_hardening.log'
+        flat: true
+
+    - name: Rescue - Fail hardening stage
+      ansible.builtin.fail:
+        msg: 'ERROR: Hardening failed. For more info check {{ log_path_dest }}/vault_hardening.log'
