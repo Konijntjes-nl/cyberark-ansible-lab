@@ -1,6 +1,6 @@
 ---
 - name: "Restore VM to 'Fresh_Install' State"
-  hosts: vault, pvwa, cpm, psm, psmp*, htmlgw*, lb*
+  hosts: dc*, vault, pvwa, cpm, psm, psmp*, htmlgw*, lb*
   gather_facts: no
   connection: local
   serial: 1  # Restore one at a time to prevent storage overload

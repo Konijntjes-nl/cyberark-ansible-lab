@@ -82,7 +82,7 @@
   when: 
     - inventory_hostname == 'dc-01'
     - hostvars[item]['ip'] is defined
-
+    
 - name: "Create CNAME Record for PKI HTTP CDP"
   ansible.windows.win_shell: |
     $Zone = "{{ domain_name }}"
@@ -93,7 +93,6 @@
         Add-DnsServerResourceRecordCName -Name $Alias -HostNameAlias $Target -ZoneName $Zone
     }
   when: inventory_hostname == 'dc-01'
-
 # ==========================================
 # SECONDARY DC (DC-02) CONFIGURATION
 # ==========================================

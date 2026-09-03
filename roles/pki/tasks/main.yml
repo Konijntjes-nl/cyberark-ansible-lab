@@ -1,55 +1,73 @@
 ---
-- name: "Install AD CS Roles"
+# ======================================================================
+# 1. INSTALL AD CS ROLES AND TOOLS
+# ======================================================================
+- name: "Install AD CS Roles and Management Tools"
   ansible.windows.win_feature:
     name:
       - AD-Certificate
       - ADCS-Cert-Authority
       - ADCS-Web-Enrollment
       - RSAT-ADCS
+      - RSAT-ADCS-Mgmt
     include_management_tools: yes
     state: present
 
+# ======================================================================
+# 2. CONFIGURE ENTERPRISE ROOT CA & HTTP CDP
+# ======================================================================
 - name: "Configure Enterprise Root CA"
-  ansible.windows.win_shell: |
-    $ErrorActionPreference = 'Stop'
-    $CAName = "CyberArk-Lab-Root-CA"
-    $Service = Get-Service CertSvc -ErrorAction SilentlyContinue
-    
-    if ($Service.Status -ne 'Running') {
-        Install-AdcsCertificationAuthority -CAType EnterpriseRootCa `
-            -CryptoProviderName "RSA#Microsoft Software Key Storage Provider" `
-            -KeyLength 4096 `
-            -HashAlgorithmName SHA256 `
-            -CACommonName $CAName `
-            -ValidityPeriod Years `
-            -ValidityPeriodUnits 5 `
-            -Force `
-            -Confirm:$false
-    }
-    Install-AdcsWebEnrollment -Force -Confirm:$false
+  ansible.windows.win_shell:
+    cmd: |
+      $ErrorActionPreference = 'Stop'
+      
+      # FIX: Restore the system PSModulePath dropped by Ansible's 'become' context
+      $env:PSModulePath = [System.Environment]::GetEnvironmentVariable("PSModulePath", "Machine")
+      Import-Module ADCSDeployment
+      
+      $CAName = "CyberArk-Lab-Root-CA"
+      $Service = Get-Service CertSvc -ErrorAction SilentlyContinue
+      
+      if ($Service.Status -ne 'Running') {
+          Install-AdcsCertificationAuthority -CAType EnterpriseRootCa `
+              -CryptoProviderName "RSA#Microsoft Software Key Storage Provider" `
+              -KeyLength 4096 `
+              -HashAlgorithmName SHA256 `
+              -CACommonName $CAName `
+              -ValidityPeriod Years `
+              -ValidityPeriodUnits 5 `
+              -Force `
+              -Confirm:$false
+      }
+      Install-AdcsWebEnrollment -Force -Confirm:$false
 
-    # Registry Tuning
-    certutil -setreg 'Policy\EditFlags' '+EDITF_ATTRIBUTENDROUTING'
-    certutil -setreg 'CA\CRLPeriodUnits' 1
-    certutil -setreg 'CA\CRLPeriod' 'Years'
-    certutil -setreg 'CA\CRLDeltaPeriodUnits' 0
-    
-    # Configure HTTP CDP Extension 
-    # Flag 10 = Include in CDP of issued certs (2) + Include in CRLs to find Delta (8)
-    $ExtensionPath = "HKLM:\SYSTEM\CurrentControlSet\Services\CertSvc\Configuration\$CAName\Extension"
-    $CurrentCDP = (Get-ItemProperty -Path $ExtensionPath -Name CRLPublicationURLs).CRLPublicationURLs
-    $HttpCDP = "10:http://pki.lab.cybermark.tech/CertEnroll/%3%8%9.crl"
-    
-    if ($CurrentCDP -notcontains $HttpCDP) {
-        Set-ItemProperty -Path $ExtensionPath -Name CRLPublicationURLs -Value ($CurrentCDP + $HttpCDP)
-        Restart-Service CertSvc
-        certutil -crl
-    }
-  # --- ORIGINAL LOGIC RESTORED: BECOME DOMAIN ADMIN ---
+      # Registry Tuning
+      certutil -setreg 'Policy\EditFlags' '+EDITF_ATTRIBUTESUBJECTALTNAME2'
+      certutil -setreg 'CA\CRLPeriodUnits' 1
+      certutil -setreg 'CA\CRLPeriod' 'Years'
+      certutil -setreg 'CA\CRLDeltaPeriodUnits' 0
+      
+      # CRITICAL FIX: Overwrite CDP to strip LDAP. CyberArk ONLY supports HTTP.
+      # 65 = Publish CRL locally. 10 = Include in issued certs + Include in CRLs
+      $CaPath = "HKLM:\SYSTEM\CurrentControlSet\Services\CertSvc\Configuration\$CAName"
+      $CleanCDP = @(
+          "65:C:\Windows\system32\CertSrv\CertEnroll\%3%8%9.crl",
+          "10:http://pki.lab.cybermark.tech/CertEnroll/%3%8%9.crl"
+      )
+      
+      Set-ItemProperty -Path $CaPath -Name CRLPublicationURLs -Value $CleanCDP
+      
+      # Restart service and publish clean CRL
+      Restart-Service CertSvc
+      Start-Sleep -Seconds 5
+      certutil -crl
   become: yes
   become_method: runas
   become_user: "{{ domain_admin_user }}"
 
+# ======================================================================
+# 3. TEMPLATE FIX & PERMISSIONS
+# ======================================================================
 - name: "Copy Template Script"
   ansible.windows.win_copy:
     src: FixTemplates.ps1
@@ -57,7 +75,6 @@
 
 - name: "Execute Template Script"
   ansible.windows.win_shell: "& C:\\Windows\\Temp\\FixTemplates.ps1"
-  # --- ORIGINAL LOGIC RESTORED: BECOME DOMAIN ADMIN ---
   become: yes
   become_method: runas
   become_user: "{{ domain_admin_user }}"
