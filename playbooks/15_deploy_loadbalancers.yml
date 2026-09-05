@@ -1,0 +1,210 @@
+---
+# ======================================================================
+# DEPLOY HIGH AVAILABILITY LOAD BALANCERS (HAPROXY + KEEPALIVED)
+# ======================================================================
+- name: "Deploy CyberArk Load Balancers"
+  hosts: lb*
+  become: yes
+  gather_facts: yes
+  vars:
+    # Dedicated VIPs matching the architectural design
+    vip_pvwa: "10.0.3.110"
+    vip_psm: "10.0.3.120"
+    vip_psmgw: "10.0.3.130"
+    vip_ccp: "10.0.3.140"
+    vip_conjur: "10.0.3.150"
+    vip_password: "CyberArkLBAuth123"
+  
+  tasks:
+    - name: "Install HAProxy, Keepalived, and Firewalld"
+      ansible.builtin.package:
+        name:
+          - haproxy
+          - keepalived
+          - firewalld
+        state: present
+
+    - name: "Ensure Firewalld is running"
+      ansible.builtin.service:
+        name: firewalld
+        state: started
+        enabled: yes
+
+    - name: "Allow CyberArk traffic through Firewall"
+      ansible.posix.firewalld:
+        service: "{{ item }}"
+        permanent: yes
+        state: enabled
+        immediate: yes
+      loop:
+        - https
+        - rdp
+
+    - name: "Allow VRRP protocol for Keepalived"
+      ansible.posix.firewalld:
+        rich_rule: 'rule protocol value="vrrp" accept'
+        permanent: yes
+        state: enabled
+        immediate: yes
+
+    - name: "Configure OS for Non-Local Binding (CRITICAL for multi-VIP HA)"
+      ansible.posix.sysctl:
+        name: net.ipv4.ip_nonlocal_bind
+        value: '1'
+        sysctl_set: yes
+        state: present
+        reload: yes
+
+    - name: "Configure SELinux to allow HAProxy to route to any port"
+      ansible.posix.seboolean:
+        name: haproxy_connect_any
+        state: yes
+        persistent: yes
+      ignore_errors: yes
+
+    # ------------------------------------------------------------------
+    # KEEPALIVED CONFIGURATION
+    # ------------------------------------------------------------------
+    - name: "Deploy Keepalived Configuration"
+      ansible.builtin.copy:
+        dest: /etc/keepalived/keepalived.conf
+        mode: '0644'
+        content: |
+          vrrp_script chk_haproxy {
+              script "killall -0 haproxy"
+              interval 2
+              weight 2
+          }
+
+          vrrp_instance VI_1 {
+              state {{ 'MASTER' if inventory_hostname == 'lb-01' else 'BACKUP' }}
+              interface {{ ansible_default_ipv4.interface }}
+              virtual_router_id 51
+              priority {{ 101 if inventory_hostname == 'lb-01' else 100 }}
+              advert_int 1
+              
+              authentication {
+                  auth_type PASS
+                  auth_pass {{ vip_password }}
+              }
+              
+              virtual_ipaddress {
+                  {{ vip_pvwa }}/24
+                  {{ vip_psm }}/24
+                  {{ vip_psmgw }}/24
+                  {{ vip_ccp }}/24
+                  {{ vip_conjur }}/24
+              }
+              
+              track_script {
+                  chk_haproxy
+              }
+          }
+      notify: Restart Keepalived
+
+    # ------------------------------------------------------------------
+    # HAPROXY CONFIGURATION
+    # ------------------------------------------------------------------
+    - name: "Execute HAProxy Certificate Prep Script (If missing from prior run)"
+      ansible.builtin.command: /opt/certs/1_Prepare_HAProxy_Certs.sh
+      args:
+        creates: "/opt/certs/haproxy_pvwa.pem"
+
+    - name: "Deploy HAProxy Configuration"
+      ansible.builtin.copy:
+        dest: /etc/haproxy/haproxy.cfg
+        mode: '0644'
+        content: |
+          global
+              log /dev/log local0
+              user haproxy
+              group haproxy
+              daemon
+              maxconn 4000
+              ssl-default-bind-ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384
+              ssl-default-bind-options no-sslv3 no-tlsv10 no-tlsv11
+
+          defaults
+              log global
+              mode http
+              option httplog
+              option dontlognull
+              timeout connect 5000
+              timeout client  50000
+              timeout server  50000
+
+          # ==================================================
+          # PVWA VIP (10.0.3.110) - Port 443
+          # ==================================================
+          frontend pvwa_https_front
+              bind {{ vip_pvwa }}:443 ssl crt /opt/certs/haproxy_pvwa.pem
+              default_backend pvwa_back
+
+          backend pvwa_back
+              mode http
+              # Replaces roundrobin to align closer with "Fastest TCP Response"
+              balance leastconn 
+              
+              # Injects Client IP for PVWA audit logs
+              option forwardfor header X-Forwarded-For
+              
+              # Enforces Source IP Persistence (15 minutes) WITHOUT using cookies
+              stick-table type ip size 200k expire 15m
+              stick on src
+              
+              option httpchk GET /PasswordVault/api/settings/authentication
+              server pvwa-01 {{ hostvars['pvwa-01']['ip'] }}:443 ssl verify none check
+              server pvwa-02 {{ hostvars['pvwa-02']['ip'] }}:443 ssl verify none check
+
+          # ==================================================
+          # PSM VIP (10.0.3.120) - Port 3389
+          # ==================================================
+          frontend psm_rdp_front
+              mode tcp
+              bind {{ vip_psm }}:3389
+              default_backend psm_rdp_back
+
+          backend psm_rdp_back
+              mode tcp
+              balance leastconn
+              server psm-01 {{ hostvars['psm-01']['ip'] }}:3389 check
+              server psm-02 {{ hostvars['psm-02']['ip'] }}:3389 check
+
+          # ==================================================
+          # PSMGW / HTML5GW VIP (10.0.3.130) - Port 443
+          # ==================================================
+          frontend html5gw_https_front
+              bind {{ vip_psmgw }}:443 ssl crt /opt/certs/haproxy_html5gw.pem
+              default_backend html5gw_back
+
+          backend html5gw_back
+              balance roundrobin
+              option httpchk GET /guacamole/
+              http-check expect status 200
+              server htmlgw-01 {{ hostvars['htmlgw-01']['ip'] }}:443 ssl verify none check
+              server htmlgw-02 {{ hostvars['htmlgw-02']['ip'] }}:443 ssl verify none check
+
+          # Note: CCP (10.0.3.140) and Conjur (10.0.3.150) VIPs are active in Keepalived. 
+          # You can map their HAProxy frontends here once the backend VMs are built.
+
+      notify: Restart HAProxy
+
+    - name: "Ensure HAProxy and Keepalived are enabled and started"
+      ansible.builtin.service:
+        name: "{{ item }}"
+        state: started
+        enabled: yes
+      loop:
+        - keepalived
+        - haproxy
+
+  handlers:
+    - name: Restart Keepalived
+      ansible.builtin.service:
+        name: keepalived
+        state: restarted
+
+    - name: Restart HAProxy
+      ansible.builtin.service:
+        name: haproxy
+        state: restarted

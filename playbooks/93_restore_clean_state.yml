@@ -9,11 +9,13 @@
     snapshot_name: "Fresh_Install"
 
   tasks:
-    # --- SAFETY CHECK ---
+# --- SAFETY CHECK ---
     - name: "SAFETY CHECK: Confirm Restore for {{ inventory_hostname }}"
       pause:
         prompt: "WARNING: You are about to wipe {{ inventory_hostname }} and revert to the 'Fresh_Install' state. Press Enter to continue or Ctrl+C to abort."
-      when: ansible_play_batch | length > 1
+      when: 
+        - ansible_play_batch | length > 1
+        - not force_restore | default(false) | bool
 
     # --- 1. STOP VM (Required for Rollback) ---
     - name: "1. Force Stop VM {{ vmid }}"

@@ -1,5 +1,5 @@
 ---
-# tasks file for psm prerequisities
+# tasks file for psm prerequisites
 
 - name: Install Chocolatey
   chocolatey.chocolatey.win_chocolatey:
@@ -22,7 +22,7 @@
   ansible.windows.win_shell: |
     try
     {
-        $filePath = "{{ psm_installationautomation_folder }}\\Prerequisites\\PrerequisitesConfig.xml"
+        $filePath = "{{ psm_installationautomation_folder }}\Prerequisites\PrerequisitesConfig.xml"
         $xml = [xml](Get-Content $filePath)
         $step1 = $xml.SelectSingleNode("//Step[@Name = 'DisableNLA']")
         $step1.Enable = 'Yes'
@@ -52,6 +52,11 @@
         } else {
             exit 0
         }
+      become: yes
+      become_method: runas
+      become_user: "{{ domain_admin_user }}" 
+      vars:
+        ansible_become_password: "{{ lab_password }}"
 
     - name: Get log path for prerequisities
       ansible.windows.win_shell: |
@@ -146,20 +151,25 @@
         } else {
             exit 0
         }
+      become: yes
+      become_method: runas
+      become_user: "{{ domain_admin_user }}" 
+      vars:
+        ansible_become_password: "{{ lab_password }}"
 
-    - name: Get log path for prerequisities
+    - name: Get log path for prerequisities (Post-Restart)
       ansible.windows.win_shell: |
         $Result = Get-Content "{{ psm_prerequisites_log }}"
         Write-Output $Result
-      register: log_result
+      register: log_result_post
 
     - name: Fetch prerequisites log from path
       ansible.builtin.fetch:
         src: '{{ item.logPath }}'
-        dest: '{{ log_path_dest }}/psm_prerequisites.log'
+        dest: '{{ log_path_dest }}/psm_prerequisites_{{ inventory_hostname }}.log'
         flat: true
       with_items:
-        - "{{ log_result.stdout | from_json }}"
+        - "{{ log_result_post.stdout | from_json }}"
 
     - name: Enable AutoAdminLogon
       ansible.windows.win_regedit:
@@ -170,7 +180,7 @@
         - item.restartRequired
         - psm_restart
       with_items:
-        - "{{ log_result.stdout | from_json }}"
+        - "{{ log_result_post.stdout | from_json }}"
 
     - name: Set default username for AutoAdminLogon
       ansible.windows.win_regedit:
@@ -181,7 +191,7 @@
         - item.restartRequired
         - psm_restart
       with_items:
-        - "{{ log_result.stdout | from_json }}"
+        - "{{ log_result_post.stdout | from_json }}"
 
     - name: Set default password for AutoAdminLogon
       ansible.windows.win_regedit:
@@ -189,7 +199,7 @@
         name: DefaultPassword
         data: "{{ ansible_password }}"
       with_items:
-        - "{{ log_result.stdout | from_json }}"
+        - "{{ log_result_post.stdout | from_json }}"
       when:
         - item.restartRequired
         - psm_restart
@@ -198,7 +208,7 @@
       ansible.windows.win_reboot:
         reboot_timeout: 300
       with_items:
-        - "{{ log_result.stdout | from_json }}"
+        - "{{ log_result_post.stdout | from_json }}"
       when:
         - item.restartRequired
         - psm_restart
@@ -209,7 +219,7 @@
         name: AutoAdminLogon
         state: absent
       with_items:
-        - "{{ log_result.stdout | from_json }}"
+        - "{{ log_result_post.stdout | from_json }}"
       when:
         - item.restartRequired
         - psm_restart
@@ -220,7 +230,7 @@
         name: DefaultUsername
         state: absent
       with_items:
-        - "{{ log_result.stdout | from_json }}"
+        - "{{ log_result_post.stdout | from_json }}"
       when:
         - item.restartRequired
         - psm_restart
@@ -231,27 +241,29 @@
         name: DefaultPassword
         state: absent
       with_items:
-        - "{{ log_result.stdout | from_json }}"
+        - "{{ log_result_post.stdout | from_json }}"
       when:
         - item.restartRequired
         - psm_restart
 
   rescue:
 
-    - name: Get log path for prerequisites
+    - name: Get log path for prerequisites on failure
       ansible.windows.win_shell: |
         $Result = Get-Content "{{ psm_prerequisites_log }}"
         Write-Output $Result
-      register: log_result
+      register: log_result_fail
+      ignore_errors: yes
 
     - name: Fetch prerequisites log from path
       ansible.builtin.fetch:
         src: '{{ item.logPath }}'
-        dest: '{{ log_path_dest }}/psm_prerequisites.log'
+        dest: '{{ log_path_dest }}/psm_prerequisites_{{ inventory_hostname }}_failed.log'
         flat: true
       with_items:
-        - "{{ log_result.stdout | from_json }}"
+        - "{{ log_result_fail.stdout | from_json | default([]) }}"
+      ignore_errors: yes
 
     - name: Fail when prerequisites not successful
       ansible.builtin.fail:
-        msg: 'ERROR: Prerequisites failed. For more info check {{ log_path_dest }}/psm_prerequisites.log'
+        msg: 'ERROR: Prerequisites failed. For more info check {{ log_path_dest }} on the control node.'

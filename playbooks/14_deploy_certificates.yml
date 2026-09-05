@@ -101,7 +101,7 @@
           Signature= "`$Windows NT`$"
           [NewRequest]
           Subject = "$($cert.Subject)"
-          KeyLength = 2048
+          KeyLength = 4096
           KeySpec = 1
           KeyUsage = 0xA0
           MachineKeySet = True
@@ -151,38 +151,67 @@
   vars:
     local_cert_dir: "/opt/certs"
   tasks:
-    - name: "Ensure D:\\certs Directory Exists"
+    - name: "Ensure D:\\Certs Directory Exists"
       ansible.windows.win_file:
-        path: "D:\\certs"
+        path: "D:\\Certs"
         state: directory
 
-    - name: "Push Certificates to PVWA D:\\certs"
+    - name: "Push Certificates to PVWA D:\\Certs"
       ansible.windows.win_copy:
         src: "{{ local_cert_dir }}/{{ item }}"
-        dest: "D:\\certs\\{{ item }}"
+        dest: "D:\\Certs\\{{ item }}"
       loop:
         - RootCA.cer
         - PVWA.pfx
 
-    - name: "Drop IIS Binding Helper Script"
-      ansible.windows.win_copy:
-        dest: "D:\\certs\\1_Bind_PVWA_IIS.ps1"
-        content: |
-          $Password = ConvertTo-SecureString -String '{{ lab_password }}' -Force -AsPlainText
-          $Cert = Import-PfxCertificate -FilePath "D:\certs\PVWA.pfx" -CertStoreLocation Cert:\LocalMachine\My -Password $Password
-          Import-Certificate -FilePath "D:\certs\RootCA.cer" -CertStoreLocation Cert:\LocalMachine\Root | Out-Null
-          
-          Write-Host "Certificates imported. Attempting IIS Binding..."
-          Import-Module WebAdministration
-          $Thumbprint = $Cert.Thumbprint
-          
-          if (Get-WebBinding -Name "Default Web Site" -Protocol https -ErrorAction SilentlyContinue) {
-              Remove-WebBinding -Name "Default Web Site" -Protocol https
-          }
-          New-WebBinding -Name "Default Web Site" -Protocol https -Port 443 -IPAddress "*" -SslFlags 1
-          $CertPath = "Cert:\LocalMachine\My\$Thumbprint"
-          Get-Item $CertPath | New-Item -Path "IIS:\SslBindings\*!443" -ErrorAction SilentlyContinue
-          Write-Host "Done! IIS Bound to new certificate."
+    - name: "Import Root CA to Trusted Root Store"
+      ansible.windows.win_certificate_store:
+        path: "D:\\Certs\\RootCA.cer"
+        store_location: LocalMachine
+        store_name: Root
+        state: present
+
+    - name: "Get PVWA Certificate Thumbprint"
+      ansible.windows.win_shell: |
+        $cert = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2("D:\Certs\PVWA.pfx", "{{ lab_password }}")
+        $cert.Thumbprint
+      register: pvwa_thumbprint
+
+    - name: "Import PVWA Certificate via Certutil"
+      ansible.windows.win_shell: |
+        certutil.exe -f -p "{{ lab_password }}" -importpfx My "D:\Certs\PVWA.pfx" NoRoot
+      become: yes
+      become_method: runas
+      become_user: SYSTEM
+
+    - name: "Automatically Bind IIS Certificate (If IIS is Installed)"
+      ansible.windows.win_shell: |
+        if (Get-Module -ListAvailable -Name WebAdministration) {
+            Import-Module WebAdministration
+            
+            # 1. Clean up existing bindings in IIS
+            if (Get-WebBinding -Name "Default Web Site" -Protocol https -ErrorAction SilentlyContinue) {
+                Remove-WebBinding -Name "Default Web Site" -Protocol https
+            }
+            
+            # 2. Create the new IIS binding block
+            New-WebBinding -Name "Default Web Site" -Protocol https -Port 443 -IPAddress "*" -SslFlags 0
+            
+            # 3. Apply the certificate natively via HTTP.sys
+            $Thumbprint = "{{ pvwa_thumbprint.stdout | trim }}"
+            $AppId = "{4dc3e181-e14b-4a21-b022-59fc669b0914}" # Standard IIS AppId
+            
+            netsh http delete sslcert ipport=0.0.0.0:443 2>&1 | Out-Null
+            
+            $netshOutput = netsh http add sslcert ipport=0.0.0.0:443 certhash=$Thumbprint appid=$AppId certstorename=MY
+            if ($LASTEXITCODE -ne 0) {
+                throw "Netsh failed to bind certificate: $netshOutput"
+            }
+        }
+      become: yes
+      become_method: runas
+      become_user: SYSTEM
+      when: pvwa_thumbprint.stdout is defined
 
 # ======================================================================
 # PLAY 2.5: Stage Certificates on CPM Nodes
@@ -193,22 +222,22 @@
   vars:
     local_cert_dir: "/opt/certs"
   tasks:
-    - name: "Ensure D:\\certs Directory Exists"
+    - name: "Ensure D:\\Certs Directory Exists"
       ansible.windows.win_file:
-        path: "D:\\certs"
+        path: "D:\\Certs"
         state: directory
 
-    - name: "Push Root CA to CPM D:\\certs"
+    - name: "Push Root CA to CPM D:\\Certs"
       ansible.windows.win_copy:
         src: "{{ local_cert_dir }}/RootCA.cer"
-        dest: "D:\\certs\\RootCA.cer"
+        dest: "D:\\Certs\\RootCA.cer"
 
-    - name: "Drop CPM Trust Helper Script"
-      ansible.windows.win_copy:
-        dest: "D:\\certs\\1_Trust_Root_CA.ps1"
-        content: |
-          Import-Certificate -FilePath "D:\certs\RootCA.cer" -CertStoreLocation Cert:\LocalMachine\Root | Out-Null
-          Write-Host "Done! CPM now trusts the lab Certificate Authority."
+    - name: "Import Root CA to Trusted Root Store"
+      ansible.windows.win_certificate_store:
+        path: "D:\\Certs\\RootCA.cer"
+        store_location: LocalMachine
+        store_name: Root
+        state: present
 
 # ======================================================================
 # PLAY 3: Stage Certificates on PSM Nodes
@@ -219,36 +248,49 @@
   vars:
     local_cert_dir: "/opt/certs"
   tasks:
-    - name: "Ensure D:\\certs Directory Exists"
+    - name: "Ensure D:\\Certs Directory Exists"
       ansible.windows.win_file:
-        path: "D:\\certs"
+        path: "D:\\Certs"
         state: directory
 
-    - name: "Push Certificates to PSM D:\\certs"
+    - name: "Push Certificates to PSM D:\\Certs"
       ansible.windows.win_copy:
         src: "{{ local_cert_dir }}/{{ item }}"
-        dest: "D:\\certs\\{{ item }}"
+        dest: "D:\\Certs\\{{ item }}"
       loop:
         - RootCA.cer
         - PSM.pfx
 
-    - name: "Drop RDS Binding Helper Script"
-      ansible.windows.win_copy:
-        dest: "D:\\certs\\1_Bind_PSM_RDS.ps1"
-        content: |
-          $Password = ConvertTo-SecureString -String '{{ lab_password }}' -Force -AsPlainText
-          $Cert = Import-PfxCertificate -FilePath "D:\certs\PSM.pfx" -CertStoreLocation Cert:\LocalMachine\My -Password $Password
-          Import-Certificate -FilePath "D:\certs\RootCA.cer" -CertStoreLocation Cert:\LocalMachine\Root | Out-Null
-          
-          Write-Host "Certificates imported. Attempting RDS WMI Binding..."
-          $Thumbprint = $Cert.Thumbprint
-          $Path = (Get-WmiObject -class "Win32_TSGeneralSetting" -Namespace root\cimv2\terminalservices -Filter "TerminalName='RDP-tcp'").__path
-          if ($Path) {
-              Set-WmiInstance -Path $Path -argument @{SSLCertificateSHA1Hash="$Thumbprint"} | Out-Null
-              Write-Host "Done! Remote Desktop Services bound to new certificate."
-          } else {
-              Write-Warning "RDS is not installed yet. Run this again after RDS is configured."
-          }
+    - name: "Import Root CA to Trusted Root Store"
+      ansible.windows.win_certificate_store:
+        path: "D:\\Certs\\RootCA.cer"
+        store_location: LocalMachine
+        store_name: Root
+        state: present
+
+    - name: "Get PSM Certificate Thumbprint"
+      ansible.windows.win_shell: |
+        $cert = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2("D:\Certs\PSM.pfx", "{{ lab_password }}")
+        $cert.Thumbprint
+      register: psm_thumbprint
+
+    - name: "Import PSM Certificate via Certutil"
+      ansible.windows.win_shell: |
+        certutil.exe -f -p "{{ lab_password }}" -importpfx My "D:\Certs\PSM.pfx" NoRoot
+      become: yes
+      become_method: runas
+      become_user: SYSTEM
+
+    - name: "Automatically Bind RDS Certificate (If RDS is Installed)"
+      ansible.windows.win_shell: |
+        $Path = (Get-WmiObject -class "Win32_TSGeneralSetting" -Namespace root\cimv2\terminalservices -Filter "TerminalName='RDP-tcp'" -ErrorAction SilentlyContinue).__path
+        if ($Path) {
+            Set-WmiInstance -Path $Path -argument @{SSLCertificateSHA1Hash="{{ psm_thumbprint.stdout | trim }}"} | Out-Null
+        }
+      become: yes
+      become_method: runas
+      become_user: SYSTEM
+      when: psm_thumbprint.stdout is defined
 
 # ======================================================================
 # PLAY 4: Stage Certificates on Vault Nodes
@@ -259,38 +301,50 @@
   vars:
     local_cert_dir: "/opt/certs"
   tasks:
-    - name: "Ensure D:\\certs Directory Exists"
+    - name: "Ensure D:\\Certs Directory Exists"
       ansible.windows.win_file:
-        path: "D:\\certs"
+        path: "D:\\Certs"
         state: directory
 
-    - name: "Push Certificates to Vault D:\\certs"
+    - name: "Push Certificates to Vault D:\\Certs"
       ansible.windows.win_copy:
         src: "{{ local_cert_dir }}/{{ item }}"
-        dest: "D:\\certs\\{{ item }}"
+        dest: "D:\\Certs\\{{ item }}"
       loop:
         - RootCA.cer
         - Vault.pfx
 
-    - name: "Drop Vault TLS Binding Helper Script"
-      ansible.windows.win_copy:
-        dest: "D:\\certs\\1_Bind_Vault_TLS.ps1"
-        content: |
-          $Password = ConvertTo-SecureString -String '{{ lab_password }}' -Force -AsPlainText
-          Import-PfxCertificate -FilePath "D:\certs\Vault.pfx" -CertStoreLocation Cert:\LocalMachine\My -Password $Password | Out-Null
-          Import-Certificate -FilePath "D:\certs\RootCA.cer" -CertStoreLocation Cert:\LocalMachine\Root | Out-Null
-          
-          $CACertPath = "C:\Program Files (x86)\PrivateArk\Server\CACert.exe"
-          if (Test-Path $CACertPath) {
-              Write-Host "Vault installed. Attempting to bind certificate via CACert utility..."
-              Start-Process -FilePath $CACertPath -ArgumentList "set server /process" -Wait -NoNewWindow
-              Restart-Service "PrivateArk Server" -Force -ErrorAction SilentlyContinue
-              Restart-Service "CyberArk Logic Container" -Force -ErrorAction SilentlyContinue
-              Write-Host "Done! Vault TLS bound and services restarted."
-          } else {
-              Write-Warning "Certificates imported to Windows Store, but Vault is not installed yet."
-              Write-Warning "Run 'CACert.exe set server /process' manually after installing the Vault."
-          }
+    - name: "Import Root CA to Trusted Root Store"
+      ansible.windows.win_certificate_store:
+        path: "D:\\Certs\\RootCA.cer"
+        store_location: LocalMachine
+        store_name: Root
+        state: present
+
+    - name: "Get Vault Certificate Thumbprint"
+      ansible.windows.win_shell: |
+        $cert = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2("D:\Certs\Vault.pfx", "{{ lab_password }}")
+        $cert.Thumbprint
+      register: vault_thumbprint
+
+    - name: "Import Vault Certificate via Certutil"
+      ansible.windows.win_shell: |
+        certutil.exe -f -p "{{ lab_password }}" -importpfx My "D:\Certs\Vault.pfx" NoRoot
+      become: yes
+      become_method: runas
+      become_user: SYSTEM
+
+    - name: "Automatically Bind Vault TLS Certificate (If Vault is Installed)"
+      ansible.windows.win_shell: |
+        $CACertPath = "C:\Program Files (x86)\PrivateArk\Server\CACert.exe"
+        if (Test-Path $CACertPath) {
+            Start-Process -FilePath $CACertPath -ArgumentList "set server /process" -Wait -NoNewWindow
+            Restart-Service "PrivateArk Server" -Force -ErrorAction SilentlyContinue
+            Restart-Service "CyberArk Logic Container" -Force -ErrorAction SilentlyContinue
+        }
+      become: yes
+      become_method: runas
+      become_user: SYSTEM
 
 # ======================================================================
 # PLAY 5: Stage Certificates on HTML5 Gateway Nodes (Linux / Podman)
@@ -317,6 +371,15 @@
         - RootCA.pem
         - HTML5GW.pfx
         - PVWA.pfx
+
+    - name: "Place Root CA in OS Trust Store"
+      ansible.builtin.copy:
+        src: "{{ local_cert_dir }}/RootCA.pem"
+        dest: "/etc/pki/ca-trust/source/anchors/RootCA.pem"
+        mode: '0644'
+
+    - name: "Update OS CA Trust"
+      ansible.builtin.command: update-ca-trust
 
     - name: "Drop Podman PEM Conversion Script"
       ansible.builtin.copy:
@@ -368,6 +431,15 @@
         - PVWA.pfx
         - PSM.pfx
         - HTML5GW.pfx
+
+    - name: "Place Root CA in OS Trust Store"
+      ansible.builtin.copy:
+        src: "{{ local_cert_dir }}/RootCA.pem"
+        dest: "/etc/pki/ca-trust/source/anchors/RootCA.pem"
+        mode: '0644'
+
+    - name: "Update OS CA Trust"
+      ansible.builtin.command: update-ca-trust
 
     - name: "Drop HAProxy PEM Conversion Script"
       ansible.builtin.copy:
