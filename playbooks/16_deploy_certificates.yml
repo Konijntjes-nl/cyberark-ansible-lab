@@ -397,12 +397,11 @@
         mode: "{{ item.mode }}"
         setype: container_file_t
       loop:
-        - { src: 'files/certs/html5gw.crt', dest: '/opt/cert/html5gw.crt', mode: '0644' }
-        - { src: 'files/certs/html5gw.key', dest: '/opt/cert/html5gw.key', mode: '0600' }
-        # Deploy Root CA as PEM format for OpenSSL compatibility inside the container
-        - { src: 'files/certs/RootCA.pem', dest: '/opt/cert/RootCA.pem', mode: '0644' }
-        - { src: 'files/certs/RootCA.pem', dest: '/opt/cert/psm-ca.pem', mode: '0644' }
-        - { src: 'files/certs/RootCA.pem', dest: '/opt/cert/pvwa-ca.pem', mode: '0644' }
+        - { src: '/opt/certs/html5gw.crt', dest: '/opt/cert/html5gw.crt', mode: '0644' }
+        - { src: '/opt/certs/html5gw.key', dest: '/opt/cert/html5gw.key', mode: '0600' }
+        - { src: '/opt/certs/RootCA.pem', dest: '/opt/cert/RootCA.pem', mode: '0644' }
+        - { src: '/opt/certs/RootCA.pem', dest: '/opt/cert/psm-ca.pem', mode: '0644' }
+        - { src: '/opt/certs/RootCA.pem', dest: '/opt/cert/pvwa-ca.pem', mode: '0644' }
 
     - name: "Place Root CA in Host OS Trust Store"
       ansible.builtin.copy:
