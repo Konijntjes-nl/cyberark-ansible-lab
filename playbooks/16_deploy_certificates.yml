@@ -1,0 +1,514 @@
+---
+# ==============================================================================
+# PLAY 1: Generate Certificates on Enterprise CA (dc-01)
+# ==============================================================================
+- name: "Generate Certificates on CA"
+  hosts: dc-01
+  gather_facts: no
+  vars:
+    export_path: "C:\\CyberArk_Certs"
+    local_cert_dir: "/opt/certs"
+    pfx_password: "{{ lab_password }}"
+    domain: "{{ domain_name }}"
+
+  tasks:
+    - name: "Ensure Local Certs Directory Exists on Ansible Control Node"
+      delegate_to: localhost
+      ansible.builtin.file:
+        path: "{{ local_cert_dir }}"
+        state: directory
+        mode: '0755'
+
+    - name: "Ensure Export Directory Exists on CA"
+      ansible.windows.win_file:
+        path: "{{ export_path }}"
+        state: directory
+
+    - name: "Export Root CA and Convert to PEM & DER"
+      ansible.windows.win_shell: |
+        $ExportPath = '{{ export_path }}'
+        Remove-Item -Path "$ExportPath\RootCA.*" -Force -ErrorAction SilentlyContinue
+        
+        $RootCert = Get-ChildItem Cert:\LocalMachine\Root, Cert:\LocalMachine\My, Cert:\LocalMachine\CA | 
+                    Where-Object { $_.Subject -match "CyberArk-Lab-Root-CA" -or $_.Subject -match "{{ domain }}" } | 
+                    Select-Object -First 1
+        
+        if (-not $RootCert) { throw "Root CA not found in local machine stores." }
+        
+        # Binary DER (.cer)
+        $Bytes = $RootCert.Export([System.Security.Cryptography.X509Certificates.X509ContentType]::Cert)
+        [System.IO.File]::WriteAllBytes("$ExportPath\RootCA.cer", $Bytes)
+        
+        # Base64 PEM (.pem and .crt)
+        certutil.exe -f -encode "$ExportPath\RootCA.cer" "$ExportPath\RootCA.pem" | Out-Null
+        Copy-Item "$ExportPath\RootCA.pem" "$ExportPath\RootCA.crt"
+      changed_when: false
+
+    - name: "Publish Template and Restart CA Service"
+      ansible.windows.win_shell: |
+        certutil.exe -setcatemplates +CyberArkWebServer
+        Restart-Service certsvc
+        Start-Sleep -Seconds 3
+      changed_when: false
+
+    - name: "Generate SAN Certificates and Export to PFX and PEM"
+      ansible.windows.win_shell: |
+        $Password = ConvertTo-SecureString -String '{{ pfx_password }}' -Force -AsPlainText
+        $ExportPath = '{{ export_path }}'
+        
+        $CaName = (Get-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Services\CertSvc\Configuration" -Name "Active" -ErrorAction SilentlyContinue).Active
+        if (-not $CaName) {
+            $CaName = (Get-ChildItem -Path "HKLM:\SYSTEM\CurrentControlSet\Services\CertSvc\Configuration" -ErrorAction SilentlyContinue | Select-Object -ExpandProperty PSChildName -First 1)
+        }
+        $CaConfig = "$($env:COMPUTERNAME)\$CaName"
+        
+        $Certificates = @(
+            @{ 
+                Name="PVWA"
+                Subject="CN=pvwa.{{ domain }}"
+                SANs=@("pvwa.{{ domain }}", "pvwa-01.{{ domain }}", "pvwa-02.{{ domain }}", "pvwa", "pvwa-01", "pvwa-02", "10.0.3.110") 
+            },
+            @{ 
+                Name="PSM"
+                Subject="CN=psm.{{ domain }}"
+                SANs=@("psm.{{ domain }}", "psm-01.{{ domain }}", "psm-02.{{ domain }}", "psm", "psm-01", "psm-02", "10.0.3.120", "10.0.3.9", "10.0.3.10") 
+            },
+            @{ 
+                Name="Vault"
+                Subject="CN=vault.{{ domain }}"
+                SANs=@("vault.{{ domain }}", "vault-01.{{ domain }}", "vault-02.{{ domain }}", "vault", "vault-01", "vault-02") 
+            },
+            @{ 
+                Name="HTML5GW"
+                Subject="CN=htmlgw.{{ domain }}"
+                SANs=@("htmlgw.{{ domain }}", "htmlgw-01.{{ domain }}", "htmlgw-02.{{ domain }}", "htmlgw", "htmlgw-01", "htmlgw-02", "10.0.3.130", "10.0.3.13", "10.0.3.14") 
+            },
+            @{ 
+                Name="LB"
+                Subject="CN=lb.{{ domain }}"
+                SANs=@("lb.{{ domain }}", "lb-01.{{ domain }}", "lb-02.{{ domain }}", "lb", "lb-01", "lb-02") 
+            }
+        )
+        
+        foreach ($cert in $Certificates) {
+            $PfxPath = Join-Path $ExportPath "$($cert.Name).pfx"
+            $CerPath = Join-Path $ExportPath "$($cert.Name).cer"
+            $PemPath = Join-Path $ExportPath "$($cert.Name).pem"
+            
+            if (-not (Test-Path $PfxPath)) {
+                $InfPath = "$ExportPath\$($cert.Name).inf"
+                $ReqPath = "$ExportPath\$($cert.Name).req"
+                
+                $SanList = $cert.SANs | ForEach-Object { 
+                    if ($_ -match '^\d+\.\d+\.\d+\.\d+$') { "ipaddress=$_" } else { "dns=$_" }
+                }
+                $SanString = $SanList -join "&"
+                
+                $InfContent = @"
+        [Version]
+        Signature= "`$Windows NT`$"
+        [NewRequest]
+        Subject = "$($cert.Subject)"
+        KeyLength = 4096
+        KeySpec = 1
+        KeyUsage = 0xA0
+        MachineKeySet = True
+        Exportable = True
+        ProviderName = "Microsoft RSA SChannel Cryptographic Provider"
+        ProviderType = 12
+        RequestType = PKCS10
+        [Extensions]
+        2.5.29.17 = "{text}$SanString"
+        "@
+                Set-Content -Path $InfPath -Value $InfContent -Encoding ASCII
+                
+                & certreq.exe -new -q -f "$InfPath" "$ReqPath"
+                & certreq.exe -submit -q -f -attrib "CertificateTemplate:CyberArkWebServer" -config "$CaConfig" "$ReqPath" "$CerPath"
+                & certreq.exe -accept -machine -q -f "$CerPath"
+                
+                # Convert raw CER to clean Base64 PEM
+                certutil.exe -f -encode "$CerPath" "$PemPath" | Out-Null
+                
+                $MatchSubject = $cert.Subject -replace '\.', '\.'
+                $InstalledCert = Get-ChildItem Cert:\LocalMachine\My | Where-Object { $_.Subject -match $MatchSubject } | Sort-Object NotBefore -Descending | Select-Object -First 1
+                if ($InstalledCert) {
+                    Export-PfxCertificate -Cert $InstalledCert -FilePath $PfxPath -Password $Password | Out-Null
+                }
+                Remove-Item $InfPath, $ReqPath -Force -ErrorAction SilentlyContinue
+            }
+        }
+      changed_when: false
+
+    - name: "Fetch Certificates to Ansible Control Node (/opt/certs)"
+      ansible.builtin.fetch:
+        src: "{{ export_path }}\\{{ item }}"
+        dest: "{{ local_cert_dir }}/"
+        flat: yes
+      loop:
+        - PVWA.pfx
+        - PSM.pfx
+        - Vault.pfx
+        - HTML5GW.pfx
+        - LB.pfx
+        - RootCA.cer
+        - RootCA.pem
+        - RootCA.crt
+
+
+# ==============================================================================
+# PLAY 2: Stage Certificates on PVWA Nodes
+# ==============================================================================
+- name: "Stage Certificates to PVWA"
+  hosts: pvwa
+  gather_facts: no
+  vars:
+    local_cert_dir: "/opt/certs"
+
+  tasks:
+    - name: "Ensure D:\\Certs Directory Exists"
+      ansible.windows.win_file:
+        path: "D:\\Certs"
+        state: directory
+
+    - name: "Push Certificates to PVWA D:\\Certs"
+      ansible.windows.win_copy:
+        src: "{{ local_cert_dir }}/{{ item }}"
+        dest: "D:\\Certs\\{{ item }}"
+      loop:
+        - RootCA.cer
+        - PVWA.pfx
+
+    - name: "Import Root CA to Trusted Root Store"
+      ansible.windows.win_certificate_store:
+        path: "D:\\Certs\\RootCA.cer"
+        store_location: LocalMachine
+        store_name: Root
+        state: present
+
+    - name: "Get PVWA Certificate Thumbprint"
+      ansible.windows.win_shell: |
+        $cert = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2("D:\Certs\PVWA.pfx", "{{ lab_password }}")
+        $cert.Thumbprint
+      register: pvwa_thumbprint
+
+    - name: "Import PVWA Certificate via Certutil"
+      ansible.windows.win_shell: |
+        certutil.exe -f -p "{{ lab_password }}" -importpfx My "D:\Certs\PVWA.pfx" NoRoot
+      become: yes
+      become_method: runas
+      become_user: SYSTEM
+
+    - name: "Automatically Bind IIS Certificate (If IIS is Installed)"
+      ansible.windows.win_shell: |
+        if (Get-Module -ListAvailable -Name WebAdministration) {
+            Import-Module WebAdministration
+            if (Get-WebBinding -Name "Default Web Site" -Protocol https -ErrorAction SilentlyContinue) {
+                Remove-WebBinding -Name "Default Web Site" -Protocol https
+            }
+            New-WebBinding -Name "Default Web Site" -Protocol https -Port 443 -IPAddress "*" -SslFlags 0
+            
+            $Thumbprint = "{{ pvwa_thumbprint.stdout | trim }}"
+            $AppId = "{4dc3e181-e14b-4a21-b022-59fc669b0914}"
+            
+            netsh http delete sslcert ipport=0.0.0.0:443 2>&1 | Out-Null
+            $netshOutput = netsh http add sslcert ipport=0.0.0.0:443 certhash=$Thumbprint appid=$AppId certstorename=MY
+            if ($LASTEXITCODE -ne 0) {
+                throw "Netsh failed to bind certificate: $netshOutput"
+            }
+        }
+      become: yes
+      become_method: runas
+      become_user: SYSTEM
+
+
+# ==============================================================================
+# PLAY 3: Stage Certificates on PSM Nodes
+# ==============================================================================
+- name: "Stage Certificates to PSM"
+  hosts: psm
+  gather_facts: no
+  vars:
+    local_cert_dir: "/opt/certs"
+
+  tasks:
+    - name: "Ensure D:\\Certs Directory Exists"
+      ansible.windows.win_file:
+        path: "D:\\Certs"
+        state: directory
+
+    - name: "Push Certificates to PSM D:\\Certs"
+      ansible.windows.win_copy:
+        src: "{{ local_cert_dir }}/{{ item }}"
+        dest: "D:\\Certs\\{{ item }}"
+      loop:
+        - RootCA.cer
+        - PSM.pfx
+
+    - name: "Import Root CA to Trusted Root Store"
+      ansible.windows.win_certificate_store:
+        path: "D:\\Certs\\RootCA.cer"
+        store_location: LocalMachine
+        store_name: Root
+        state: present
+
+    - name: "Get PSM Certificate Thumbprint"
+      ansible.windows.win_shell: |
+        $cert = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2("D:\Certs\PSM.pfx", "{{ lab_password }}")
+        $cert.Thumbprint
+      register: psm_thumbprint
+
+    - name: "Import PSM Certificate via Certutil"
+      ansible.windows.win_shell: |
+        certutil.exe -f -p "{{ lab_password }}" -importpfx My "D:\Certs\PSM.pfx" NoRoot
+      become: yes
+      become_method: runas
+      become_user: SYSTEM
+
+    - name: "Grant TermService Read Access to PSM Private Key"
+      ansible.windows.win_shell: |
+        $Thumbprint = "{{ psm_thumbprint.stdout | trim }}"
+        $Cert = Get-ChildItem Cert:\LocalMachine\My | Where-Object { $_.Thumbprint -eq $Thumbprint }
+        if ($Cert -and $Cert.PrivateKey) {
+            $ContainerName = $Cert.PrivateKey.CspKeyContainerInfo.UniqueKeyContainerName
+            $KeyPath = Join-Path $env:ProgramData "Microsoft\Crypto\RSA\MachineKeys\$ContainerName"
+            if (Test-Path $KeyPath) {
+                $Acl = Get-Acl -Path $KeyPath
+                $Rule = New-Object System.Security.AccessControl.FileSystemAccessRule("NT SERVICE\TermService", "Read", "Allow")
+                $Acl.AddAccessRule($Rule)
+                Set-Acl -Path $KeyPath -AclObject $Acl
+            }
+        }
+      become: yes
+      become_method: runas
+      become_user: SYSTEM
+
+    - name: "Automatically Bind RDS Certificate (If RDS is Installed)"
+      ansible.windows.win_shell: |
+        $Path = (Get-WmiObject -class "Win32_TSGeneralSetting" -Namespace root\cimv2\terminalservices -Filter "TerminalName='RDP-tcp'" -ErrorAction SilentlyContinue).__path
+        if ($Path) {
+            Set-WmiInstance -Path $Path -argument @{SSLCertificateSHA1Hash="{{ psm_thumbprint.stdout | trim }}"} | Out-Null
+        }
+      become: yes
+      become_method: runas
+      become_user: SYSTEM
+
+
+# ==============================================================================
+# PLAY 4: Stage Certificates on CPM Nodes
+# ==============================================================================
+- name: "Stage Certificates to CPM"
+  hosts: cpm
+  gather_facts: no
+  vars:
+    local_cert_dir: "/opt/certs"
+
+  tasks:
+    - name: "Ensure D:\\Certs Directory Exists"
+      ansible.windows.win_file:
+        path: "D:\\Certs"
+        state: directory
+
+    - name: "Push Root CA to CPM D:\\Certs"
+      ansible.windows.win_copy:
+        src: "{{ local_cert_dir }}/RootCA.cer"
+        dest: "D:\\Certs\\RootCA.cer"
+
+    - name: "Import Root CA to Trusted Root Store"
+      ansible.windows.win_certificate_store:
+        path: "D:\\Certs\\RootCA.cer"
+        store_location: LocalMachine
+        store_name: Root
+        state: present
+
+
+# ==============================================================================
+# PLAY 5: Stage Certificates on Vault Nodes
+# ==============================================================================
+- name: "Stage Certificates to Vault"
+  hosts: vault
+  gather_facts: no
+  vars:
+    local_cert_dir: "/opt/certs"
+
+  tasks:
+    - name: "Ensure D:\\Certs Directory Exists"
+      ansible.windows.win_file:
+        path: "D:\\Certs"
+        state: directory
+
+    - name: "Push Certificates to Vault D:\\Certs"
+      ansible.windows.win_copy:
+        src: "{{ local_cert_dir }}/{{ item }}"
+        dest: "D:\\Certs\\{{ item }}"
+      loop:
+        - RootCA.cer
+        - Vault.pfx
+
+    - name: "Import Root CA to Trusted Root Store"
+      ansible.windows.win_certificate_store:
+        path: "D:\\Certs\\RootCA.cer"
+        store_location: LocalMachine
+        store_name: Root
+        state: present
+
+    - name: "Get Vault Certificate Thumbprint"
+      ansible.windows.win_shell: |
+        $cert = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2("D:\Certs\Vault.pfx", "{{ lab_password }}")
+        $cert.Thumbprint
+      register: vault_thumbprint
+
+    - name: "Import Vault Certificate via Certutil"
+      ansible.windows.win_shell: |
+        certutil.exe -f -p "{{ lab_password }}" -importpfx My "D:\Certs\Vault.pfx" NoRoot
+      become: yes
+      become_method: runas
+      become_user: SYSTEM
+
+
+# ==============================================================================
+# PLAY 6: Stage Certificates on HTML5 Gateway Nodes (Linux / Podman)
+# ==============================================================================
+- name: "Stage Certificates to HTML5GW"
+  hosts: htmlgw*
+  gather_facts: no
+  become: yes
+  vars:
+    local_cert_dir: "/opt/certs"
+    container_cert_dir: "/opt/cert"
+
+  tasks:
+    - name: "Ensure /opt/cert Directory Exists"
+      ansible.builtin.file:
+        path: "{{ container_cert_dir }}"
+        state: directory
+        mode: '0755'
+
+    - name: "HTML5GW - Prepare Certificate Directory"
+      ansible.builtin.file:
+        path: /opt/cert
+        state: directory
+        mode: '0755'
+        setype: container_file_t
+
+    - name: "HTML5GW - Copy Certificates and Keys"
+      ansible.builtin.copy:
+        src: "{{ item.src }}"
+        dest: "{{ item.dest }}"
+        mode: "{{ item.mode }}"
+        setype: container_file_t
+      loop:
+        - { src: 'files/certs/html5gw.crt', dest: '/opt/cert/html5gw.crt', mode: '0644' }
+        - { src: 'files/certs/html5gw.key', dest: '/opt/cert/html5gw.key', mode: '0600' }
+        # Deploy Root CA as PEM format for OpenSSL compatibility inside the container
+        - { src: 'files/certs/RootCA.pem', dest: '/opt/cert/RootCA.pem', mode: '0644' }
+        - { src: 'files/certs/RootCA.pem', dest: '/opt/cert/psm-ca.pem', mode: '0644' }
+        - { src: 'files/certs/RootCA.pem', dest: '/opt/cert/pvwa-ca.pem', mode: '0644' }
+
+    - name: "Place Root CA in Host OS Trust Store"
+      ansible.builtin.copy:
+        src: "{{ local_cert_dir }}/RootCA.pem"
+        dest: "/etc/pki/ca-trust/source/anchors/RootCA.pem"
+        mode: '0644'
+
+    - name: "Update Host OS CA Trust"
+      ansible.builtin.command: update-ca-trust
+
+    - name: "Generate Strict Formats and Purge All PFX Bundles"
+      ansible.builtin.shell:
+        cmd: |
+          set -e
+          cd {{ container_cert_dir }}
+
+          # 1. Strip Windows carriage returns
+          sed -i 's/\r$//' *.pem *.cer 2>/dev/null || true
+
+          # 2. Extract HTML5 Gateway Certificate & Private Key
+          openssl pkcs12 -in HTML5GW.pfx -nocerts -out html5gw.key -nodes -passin pass:{{ lab_password }}
+          openssl pkcs12 -in HTML5GW.pfx -clcerts -nokeys -out html5gw.crt -passin pass:{{ lab_password }}
+
+          # 3. Clean Root CA copies
+          cp RootCA.pem ca.pem
+          cp RootCA.pem ca.crt
+
+          # 4. PSM Signing CA formats
+          cp RootCA.cer psm-ca.cer
+          openssl x509 -in RootCA.pem -outform der -out psm-ca.der
+
+          # 5. PVWA Signing CA formats
+          cp RootCA.pem pvwa-ca.pem
+          openssl x509 -in RootCA.pem -outform der -out pvwa-ca.der
+
+          # 6. Extract Public component certificates
+          openssl pkcs12 -in PVWA.pfx -clcerts -nokeys -out pvwa.crt -passin pass:{{ lab_password }}
+          openssl pkcs12 -in PSM.pfx -clcerts -nokeys -out psm.crt -passin pass:{{ lab_password }}
+
+          # 7. Normalize all PEM blocks
+          for f in *.crt *.pem *.key; do
+            [ -f "$f" ] && (openssl x509 -in "$f" -out "$f" 2>/dev/null || openssl rsa -in "$f" -out "$f" 2>/dev/null || true)
+          done
+
+          # 8. Delete all PFX bundles from /opt/cert
+          rm -f *.pfx
+
+          # 9. Set permissions
+          chmod 600 *
+          chmod 755 .
+      args:
+        executable: /bin/bash
+
+
+# ==============================================================================
+# PLAY 7: Stage Certificates on Load Balancer Nodes (Linux / HAProxy)
+# ==============================================================================
+- name: "Stage Certificates to Load Balancers"
+  hosts: lb*
+  gather_facts: no
+  become: yes
+  vars:
+    local_cert_dir: "/opt/certs"
+
+  tasks:
+    - name: "Ensure /opt/certs Directory Exists"
+      ansible.builtin.file:
+        path: "/opt/certs"
+        state: directory
+        mode: '0755'
+
+    - name: "Push Certificates to Load Balancer"
+      ansible.builtin.copy:
+        src: "{{ local_cert_dir }}/{{ item }}"
+        dest: "/opt/certs/{{ item }}"
+        mode: '0600'
+      loop:
+        - RootCA.pem
+        - LB.pfx
+        - PVWA.pfx
+        - PSM.pfx
+        - HTML5GW.pfx
+
+    - name: "Place Root CA in Host OS Trust Store"
+      ansible.builtin.copy:
+        src: "{{ local_cert_dir }}/RootCA.pem"
+        dest: "/etc/pki/ca-trust/source/anchors/RootCA.pem"
+        mode: '0644'
+
+    - name: "Update Host OS CA Trust"
+      ansible.builtin.command: update-ca-trust
+
+    - name: "Combine Private Keys and Certificates for HAProxy"
+      ansible.builtin.shell:
+        cmd: |
+          set -e
+          cd /opt/certs
+          
+          for cert in LB PVWA PSM HTML5GW; do
+              if [ -f "${cert}.pfx" ]; then
+                  lower_cert=$(echo "$cert" | tr '[:upper:]' '[:lower:]')
+                  openssl pkcs12 -in "${cert}.pfx" -nocerts -out "${lower_cert}.key" -nodes -passin pass:{{ lab_password }}
+                  openssl pkcs12 -in "${cert}.pfx" -clcerts -nokeys -out "${lower_cert}.crt" -passin pass:{{ lab_password }}
+                  cat "${lower_cert}.crt" "${lower_cert}.key" > "haproxy_${lower_cert}.pem"
+              fi
+          done
+          chmod 600 *.pem *.key *.crt
+      args:
+        executable: /bin/bash

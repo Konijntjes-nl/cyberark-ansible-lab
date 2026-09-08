@@ -1,0 +1,207 @@
+---
+- name: "Deploy and Configure High Availability Load Balancers (HAProxy & Keepalived)"
+  hosts: lb*
+  become: yes
+  gather_facts: yes
+  vars:
+    vip_pvwa: "10.0.3.110"
+    vip_psm: "10.0.3.120"
+    vip_htmlgw: "10.0.3.130"
+
+  tasks:
+    - name: "Install HAProxy, Keepalived, PSMisc, and SELinux tools"
+      ansible.builtin.package:
+        name:
+          - haproxy
+          - keepalived
+          - psmisc
+          - policycoreutils-python-utils
+        state: present
+
+    - name: "Enable non-local IP binding via sysctl"
+      ansible.posix.sysctl:
+        name: net.ipv4.ip_nonlocal_bind
+        value: '1'
+        state: present
+        reload: yes
+
+    - name: "Allow HAProxy to connect to any backend port (SELinux)"
+      ansible.posix.seboolean:
+        name: haproxy_connect_any
+        state: yes
+        persistent: yes
+
+    - name: "Allow HAProxy to bind to custom listening ports (8404 and 3389)"
+      ansible.builtin.shell: |
+        # Allow Stats Port 8404
+        if ! semanage port -l | grep -q "http_port_t.*\<8404\>"; then
+            semanage port -a -t http_port_t -p tcp 8404 || semanage port -m -t http_port_t -p tcp 8404
+        fi
+        # Allow PSM RDP Port 3389
+        if ! semanage port -l | grep -q "http_port_t.*\<3389\>"; then
+            semanage port -a -t http_port_t -p tcp 3389 || semanage port -m -t http_port_t -p tcp 3389
+        fi
+      changed_when: false
+
+    - name: "Generate Keepalived Configuration"
+      ansible.builtin.copy:
+        dest: /etc/keepalived/keepalived.conf
+        mode: '0644'
+        content: |
+          global_defs {
+              router_id {{ ansible_facts['hostname'] }}
+              enable_script_security
+              script_user root
+          }
+
+          vrrp_script check_haproxy {
+              script "/usr/bin/killall -0 haproxy"
+              interval 2
+              weight 2
+          }
+
+          vrrp_instance VI_1 {
+              state {{ 'MASTER' if inventory_hostname == 'lb-01' else 'BACKUP' }}
+              interface {{ ansible_facts['default_ipv4']['interface'] }}
+              virtual_router_id 51
+              priority {{ 101 if inventory_hostname == 'lb-01' else 100 }}
+              advert_int 1
+
+              authentication {
+                  auth_type PASS
+                  auth_pass {{ lab_password }}
+              }
+
+              virtual_ipaddress {
+                  {{ vip_pvwa }}/24 dev {{ ansible_facts['default_ipv4']['interface'] }} label {{ ansible_facts['default_ipv4']['interface'] }}:pvwa
+                  {{ vip_psm }}/24 dev {{ ansible_facts['default_ipv4']['interface'] }} label {{ ansible_facts['default_ipv4']['interface'] }}:psm
+                  {{ vip_htmlgw }}/24 dev {{ ansible_facts['default_ipv4']['interface'] }} label {{ ansible_facts['default_ipv4']['interface'] }}:htmlgw
+              }
+
+              track_script {
+                  check_haproxy
+              }
+          }
+      notify: Restart Keepalived
+
+    - name: "Generate HAProxy Configuration"
+      ansible.builtin.copy:
+        dest: /etc/haproxy/haproxy.cfg
+        mode: '0644'
+        content: |
+          global
+              log         127.0.0.1 local2
+              chroot      /var/lib/haproxy
+              maxconn     4000
+              user        haproxy
+              group       haproxy
+              daemon
+              stats socket /var/lib/haproxy/stats
+              tune.bufsize 65536
+
+          defaults
+              mode                    tcp
+              log                     global
+              option                  tcplog
+              option                  dontlognull
+              retries                 3
+              timeout queue           1m
+              timeout connect         10s
+              timeout client          1m
+              timeout server          1m
+              timeout check           10s
+              maxconn                 3000
+
+          # --- STATS DASHBOARD (HTTPS) ---
+          frontend stats
+              bind *:8404 ssl crt /opt/certs/haproxy_lb.pem
+              mode http
+              stats enable
+              stats uri /
+              stats refresh 5s
+              stats auth admin:{{ lab_password }}
+              stats admin if TRUE
+
+          # --- PVWA HTTPS & REDIRECT ---
+          frontend pvwa_frontend
+              bind {{ vip_pvwa }}:443 ssl crt /opt/certs/haproxy_pvwa.pem alpn h2,http/1.1
+              mode http
+              option forwardfor
+              http-request set-header Host pvwa.lab.cybermark.tech
+              http-request set-header X-Forwarded-Proto https
+              http-request set-header X-Forwarded-Port 443
+              http-request redirect location /PasswordVault code 301 if { path / } or { path -m len 0 }
+              default_backend pvwa_backend
+
+          backend pvwa_backend
+              mode http
+              balance roundrobin
+              cookie PVWAPOOL insert indirect nocache
+              http-reuse safe
+              option http-server-close
+
+              option httpchk
+              http-check send meth GET uri /PasswordVault/api/settings/authentication hdr Host pvwa.lab.cybermark.tech
+              http-check expect status 200
+
+              server pvwa-01 10.0.3.5:443 ssl check verify none sni str(pvwa.lab.cybermark.tech) alpn http/1.1 inter 5s fall 3 rise 2 cookie pvwa-01
+              server pvwa-02 10.0.3.6:443 ssl check verify none sni str(pvwa.lab.cybermark.tech) alpn http/1.1 inter 5s fall 3 rise 2 cookie pvwa-02
+
+          # --- PSM RDP LOAD BALANCING (WITH APPLICATION HEALTH CHECK) ---
+          frontend psm_frontend
+              bind {{ vip_psm }}:3389
+              mode tcp
+              default_backend psm_backend
+
+          backend psm_backend
+              mode tcp
+              balance leastconn
+              option tcp-check
+
+              server psm-01 10.0.3.9:3389 check
+              server psm-02 10.0.3.10:3389 check
+
+          # --- HTML5 GATEWAY (HTTPS & HEALTH CHECK) ---
+          frontend htmlgw_frontend
+              bind {{ vip_htmlgw }}:443 ssl crt /opt/certs/haproxy_html5gw.pem alpn h2,http/1.1
+              mode http
+              option forwardfor
+              http-request set-header Host htmlgw.lab.cybermark.tech
+              http-request set-header X-Forwarded-Proto https
+              http-request set-header X-Forwarded-Port 443
+              default_backend htmlgw_backend
+
+          backend htmlgw_backend
+              mode http
+              balance roundrobin
+              cookie GUACPOOL insert indirect nocache
+              http-reuse safe
+              option http-server-close
+
+              option httpchk
+              http-check send meth GET uri /guac/rest/healthcheck hdr Host htmlgw.lab.cybermark.tech
+              http-check expect status 200
+
+              server htmlgw-01 10.0.3.11:443 ssl check verify none sni str(htmlgw.lab.cybermark.tech) alpn http/1.1 inter 5s fall 3 rise 2 cookie htmlgw-01
+              server htmlgw-02 10.0.3.12:443 ssl check verify none sni str(htmlgw.lab.cybermark.tech) alpn http/1.1 inter 5s fall 3 rise 2 cookie htmlgw-02
+      notify: Restart HAProxy
+
+    - name: "Ensure Keepalived and HAProxy are started and enabled"
+      ansible.builtin.service:
+        name: "{{ item }}"
+        state: started
+        enabled: yes
+      loop:
+        - keepalived
+        - haproxy
+
+  handlers:
+    - name: "Restart Keepalived"
+      ansible.builtin.service:
+        name: keepalived
+        state: restarted
+
+    - name: "Restart HAProxy"
+      ansible.builtin.service:
+        name: haproxy
+        state: restarted

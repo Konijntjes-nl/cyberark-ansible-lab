@@ -4,7 +4,7 @@
 # ======================================================================
 
 # Step 1: Provision VMs via Proxmox
-- import_playbook: 10_provision_proxmox_vms.yml
+- import_playbook: 93_restore_clean_state.yml
 
 # Step 2: Start all VMs
 - import_playbook: 11_start_vms.yml
@@ -16,16 +16,16 @@
 - import_playbook: 13_join_components_ad.yml
 
 # Step 5: Mount CyberArk Installation Binaries (ISO)
-- import_playbook: 20_deploy_files.yml
+- import_playbook: 14_deploy_files.yml
 
 # Step 6: Deploy CyberArk Component Prerequisites
-- import_playbook: 21_deploy_pre-requirements.yml
+- import_playbook: 15_deploy_pre-requirements.yml
 
 # Step 7: Generate Certificates, Stage and Bind/Prepare Them
-- import_playbook: 14_deploy_certificates.yml
+- import_playbook: 16_deploy_certificates.yml
 
 # Step 8: Generate Certificates, Stage and Bind/Prepare Them
-- import_playbook: 15_deploy_loadbalancers.yml
+- import_playbook: 17_deploy_loadbalancers.yml
 
 # Step 8: Final Validation Checks
 - import_playbook: 90_validate_lab.yml

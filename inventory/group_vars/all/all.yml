@@ -26,6 +26,7 @@ domain_dn: "{{ domain_name.split('.') | map('regex_replace', '^', 'DC=') | join(
 
 
 domain_admin_user: "{{ domain_netbios }}\\Administrator"
+domain_priv_user: "{{ domain_netbios }}\\mlam-adm"
 domain_admin_password: "{{ vault_lab_password }}"
 safe_mode_password: "{{ vault_lab_password }}"
 #vault_domain_admin_password: "{{ vault_lab_password }}"

@@ -7,13 +7,14 @@
 
   vars:
     snapshot_name: "Fresh_Install"
+    force_restore: true  # Set to true so it runs unattended in master playbooks
 
   tasks:
-# --- SAFETY CHECK ---
+    # --- SAFETY CHECK (Bypassed when force_restore is true) ---
     - name: "SAFETY CHECK: Confirm Restore for {{ inventory_hostname }}"
-      pause:
+      ansible.builtin.pause:
         prompt: "WARNING: You are about to wipe {{ inventory_hostname }} and revert to the 'Fresh_Install' state. Press Enter to continue or Ctrl+C to abort."
-      when: 
+      when:
         - ansible_play_batch | length > 1
         - not force_restore | default(false) | bool
 
@@ -59,21 +60,21 @@
 
     # --- 4. WAIT FOR CONNECTIVITY ---
     - name: "4. Wait for WinRM Port (5985)"
-      wait_for:
+      ansible.builtin.wait_for:
         host: "{{ ip }}"
         port: 5985
         state: started
         timeout: 300
         delay: 5
       delegate_to: localhost
-      when: ostype == 'win10' or ostype == 'win2019'
+      when: ostype in ['win10', 'win2019', 'win2022']
 
     - name: "4. Wait for SSH Port (22)"
-      wait_for:
+      ansible.builtin.wait_for:
         host: "{{ ip }}"
         port: 22
         state: started
         timeout: 300
         delay: 5
       delegate_to: localhost
-      when: ostype == 'l26' or ostype == 'linux'
+      when: ostype in ['l26', 'linux']

@@ -1,0 +1,17 @@
+- name: "HTML5GW - Deploy Podman Container"
+      ansible.builtin.shell: >
+        ./html5_console.sh run -ti -d 
+        -p 443:8443 
+        -v /opt/cert/:/opt/import:ro 
+        -e AcceptIdiraEULA=yes 
+        -e GWCert=html5gw.crt 
+        -e GWKey=html5gw.key 
+        -e GWCAFile=RootCA.pem 
+        -e EndPointAddress=https://pvwa.lab.cybermark.tech/passwordvault 
+        -e PSMGWGuacLogLevel=debug 
+        -e PSMGWAppLogLevel=debug 
+        --hostname {{ ansible_facts['fqdn'] }} 
+        --name {{ inventory_hostname }} 
+        cahtml5gw:15_2_0_3
+      args:
+        chdir: /opt/CARKpsmgw/

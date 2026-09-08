@@ -1,0 +1,306 @@
+---
+# ==============================================================================
+# 1. MOUNT CYBERARK INSTALLATION BINARIES (ISO)
+# ==============================================================================
+- name: "Mount CyberArk Installation Binaries (ISO)"
+  hosts: vault, pvwa, cpm, psm, psmp*, htmlgw*
+  gather_facts: no
+  vars:
+    iso_storage_pool: "local"
+    cyberark_iso_name: "CyberArk_Software.iso"
+
+  tasks:
+    # ----------------------------------------------------------------------
+    # Proxmox Hardware Attachment & Cleanup
+    # ----------------------------------------------------------------------
+    - name: "Attach ISO to Windows via native qm CLI (scsi2 hot-plug)"
+      ansible.builtin.command: "qm set {{ vmid }} -scsi2 {{ iso_storage_pool }}:iso/{{ cyberark_iso_name }},media=cdrom"
+      delegate_to: "{{ target_node }}"
+      vars:
+        ansible_user: root
+      when: "'windows' in group_names"
+
+    - name: "Clean up ghost scsi2 drive on Linux nodes"
+      ansible.builtin.command: "qm set {{ vmid }} -delete scsi2"
+      delegate_to: "{{ target_node }}"
+      vars:
+        ansible_user: root
+      when: "'linux' in group_names"
+      failed_when: false
+
+    - name: "Shut down Linux nodes for IDE hardware modification"
+      community.proxmox.proxmox_kvm:
+        api_host: "{{ proxmox_api_host }}"
+        api_user: "{{ proxmox_user }}"
+        api_token_id: "{{ proxmox_token_id }}"
+        api_token_secret: "{{ proxmox_token_secret }}"
+        validate_certs: false
+        node: "{{ target_node }}"
+        vmid: "{{ vmid }}"
+        state: stopped
+        timeout: 60
+      delegate_to: localhost
+      when: "'linux' in group_names"
+
+    - name: "Attach ISO to Linux via native qm CLI (ide0 cold-plug)"
+      ansible.builtin.command: "qm set {{ vmid }} -ide0 {{ iso_storage_pool }}:iso/{{ cyberark_iso_name }},media=cdrom"
+      delegate_to: "{{ target_node }}"
+      vars:
+        ansible_user: root
+      when: "'linux' in group_names"
+
+    - name: "Start Linux nodes to detect IDE hardware"
+      community.proxmox.proxmox_kvm:
+        api_host: "{{ proxmox_api_host }}"
+        api_user: "{{ proxmox_user }}"
+        api_token_id: "{{ proxmox_token_id }}"
+        api_token_secret: "{{ proxmox_token_secret }}"
+        validate_certs: false
+        node: "{{ target_node }}"
+        vmid: "{{ vmid }}"
+        state: started
+      delegate_to: localhost
+      when: "'linux' in group_names"
+
+    - name: "Wait for SSH to become available on Linux nodes"
+      ansible.builtin.wait_for_connection:
+        delay: 15
+        timeout: 300
+      when: "'linux' in group_names"
+
+    # ----------------------------------------------------------------------
+    # Windows Mounting Logic
+    # ----------------------------------------------------------------------
+    - name: "Wait for Windows to recognize the CyberArk CD-ROM"
+      ansible.windows.win_shell:
+        cmd: |
+          $drive = Get-Volume | Where-Object { $_.DriveType -eq 'CD-ROM' -and $_.FileSystemLabel -notmatch 'cidata' -and $_.FileSystemLabel -ne $null } | Select-Object -First 1
+          if ($drive) { Write-Output "$($drive.DriveLetter):\" } else { exit 1 }
+      register: win_cdrom_mount
+      retries: 5
+      delay: 5
+      until: win_cdrom_mount.rc == 0
+      changed_when: false
+      when: "'windows' in group_names"
+
+    - name: "Display the Windows mounted drive path"
+      ansible.builtin.debug:
+        msg: "CyberArk Binaries mounted at {{ win_cdrom_mount.stdout | trim }} on {{ inventory_hostname }}"
+      when: "'windows' in group_names"
+
+    # ======================================================================
+    # LINUX MOUNTING LOGIC (UDF / Label Detection)
+    # ======================================================================
+    - name: "Check if CD-ROM is already mounted"
+      ansible.builtin.command: findmnt -rn /mnt/cdrom
+      register: linux_mount_check
+      failed_when: false
+      changed_when: false
+      become: yes
+      when: "'linux' in group_names"
+
+    - name: "Ensure /mnt/cdrom directory exists on Linux"
+      ansible.builtin.file:
+        path: /mnt/cdrom
+        state: directory
+        mode: '0755'
+      become: yes
+      when: 
+        - "'linux' in group_names"
+        - linux_mount_check.rc != 0
+
+    - name: "Find the CyberArk CD-ROM device"
+      ansible.builtin.shell:
+        cmd: |
+          DEV=$(blkid | grep -i "CyberArk_Software" | awk -F: '{print $1}' | head -n 1)
+          if [ -n "$DEV" ]; then
+            echo "$DEV"
+            exit 0
+          else
+            exit 1
+          fi
+      register: linux_cdrom_dev
+      become: yes
+      when: "'linux' in group_names"
+      retries: 3
+      delay: 5
+      until: linux_cdrom_dev.rc == 0
+      changed_when: false
+
+    - name: "Mount CD-ROM to /mnt/cdrom on Linux Nodes"
+      ansible.posix.mount:
+        path: /mnt/cdrom
+        src: "{{ linux_cdrom_dev.stdout }}"
+        fstype: udf
+        opts: ro
+        state: mounted
+      become: yes
+      when: 
+        - "'linux' in group_names"
+        - linux_mount_check.rc != 0
+
+
+# ==============================================================================
+# 2. SYNC CYBERARK INSTALLATION MEDIA & REMOVE READ-ONLY ATTRIBUTES
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# Vault Servers
+# ------------------------------------------------------------------------------
+- name: "Sync CyberArk Installation Media to Vault Servers"
+  hosts: vault
+  gather_facts: no
+  vars:
+    src_base: "E:\\"
+    dest_base: "D:\\CyberArk"
+    vault_components:
+      - "Requirements"
+      - "PrivateArk Client"
+      - "Vault"
+  tasks:
+    - name: "Ensure base target directory exists on D:\\"
+      ansible.windows.win_file:
+        path: "{{ dest_base }}"
+        state: directory
+
+    - name: "Sync Operator CD from E:\\Licenses\\operator to D:\\CyberArk\\CD"
+      community.windows.win_robocopy:
+        src: "E:\\Licenses\\operator"
+        dest: "{{ dest_base }}\\CD"
+        recurse: yes
+        purge: no
+        flags: "/E /Z /R:3 /W:5"
+
+    - name: "Sync License files to D:\\CyberArk\\license"
+      community.windows.win_robocopy:
+        src: "E:\\Licenses"
+        dest: "{{ dest_base }}\\license"
+        recurse: yes
+        purge: no
+        flags: "/E /Z /R:3 /W:5"
+
+    - name: "Mirror Vault installation media from E:\\ to D:\\"
+      community.windows.win_robocopy:
+        src: "{{ src_base }}\\{{ item }}"
+        dest: "{{ dest_base }}\\{{ item }}"
+        recurse: yes
+        purge: no
+        flags: "/E /Z /R:3 /W:5"
+      loop: "{{ vault_components }}"
+
+    - name: "Ensure custom host entries exist in Windows hosts file"
+      ansible.windows.win_hosts:
+        ip_address: "{{ item.ip }}"
+        canonical_name: "{{ item.name }}"
+        state: present
+      loop:
+        # Domain Controllers
+        - { ip: '10.0.3.1', name: 'dc-01.lab.cybermark.tech' }
+        - { ip: '10.0.3.2', name: 'dc-02.lab.cybermark.tech' }
+        # Vaults
+        - { ip: '10.0.3.3', name: 'vault-01.lab.cybermark.tech' }
+        - { ip: '10.0.3.4', name: 'vault-02.lab.cybermark.tech' }
+        # PKI
+        - { ip: '10.0.3.1', name: 'pki.lab.cybermark.tech' }
+
+
+# ------------------------------------------------------------------------------
+# PVWA Servers
+# ------------------------------------------------------------------------------
+- name: "Sync CyberArk Installation Media to PVWA Servers"
+  hosts: pvwa
+  gather_facts: no
+  vars:
+    src_base: "E:\\"
+    dest_base: "D:\\CyberArk"
+    pvwa_components:
+      - "Requirements"
+      - "PrivateArk Client"
+      - "Password Vault Web Access"
+  tasks:
+    - name: "Ensure base target directory exists on D:\\"
+      ansible.windows.win_file:
+        path: "{{ dest_base }}"
+        state: directory
+
+    - name: "Mirror PVWA installation media from E:\\ to D:\\"
+      community.windows.win_robocopy:
+        src: "{{ src_base }}\\{{ item }}"
+        dest: "{{ dest_base }}\\{{ item }}"
+        recurse: yes
+        purge: no
+        flags: "/E /Z /R:3 /W:5"
+      loop: "{{ pvwa_components }}"
+
+    - name: "Remove Read-Only attributes from D:\\CyberArk"
+      ansible.windows.win_shell: |
+        attrib.exe -r "D:\CyberArk\*" /s /d
+        exit 0
+
+
+# ------------------------------------------------------------------------------
+# PSM Servers
+# ------------------------------------------------------------------------------
+- name: "Sync CyberArk Installation Media to PSM Servers"
+  hosts: psm
+  gather_facts: no
+  vars:
+    src_base: "E:\\"
+    dest_base: "D:\\CyberArk"
+    psm_components:
+      - "Requirements"
+      - "PrivateArk Client"
+      - "Privileged Session Manager"
+  tasks:
+    - name: "Ensure base target directory exists on D:\\"
+      ansible.windows.win_file:
+        path: "{{ dest_base }}"
+        state: directory
+
+    - name: "Mirror PSM installation media from E:\\ to D:\\"
+      community.windows.win_robocopy:
+        src: "{{ src_base }}\\{{ item }}"
+        dest: "{{ dest_base }}\\{{ item }}"
+        recurse: yes
+        purge: no
+        flags: "/E /Z /R:3 /W:5"
+      loop: "{{ psm_components }}"
+
+    - name: "Remove Read-Only attributes from D:\\CyberArk"
+      ansible.windows.win_shell: |
+        attrib.exe -r "D:\CyberArk\*" /s /d
+        exit 0
+
+
+# ------------------------------------------------------------------------------
+# CPM Servers
+# ------------------------------------------------------------------------------
+- name: "Sync CyberArk Installation Media to CPM Servers"
+  hosts: cpm
+  gather_facts: no
+  vars:
+    src_base: "E:\\"
+    dest_base: "D:\\CyberArk"
+    cpm_components:
+      - "Requirements"
+      - "PrivateArk Client"
+      - "Central Policy Manager"
+  tasks:
+    - name: "Ensure base target directory exists on D:\\"
+      ansible.windows.win_file:
+        path: "{{ dest_base }}"
+        state: directory
+
+    - name: "Mirror CPM installation media from E:\\ to D:\\"
+      community.windows.win_robocopy:
+        src: "{{ src_base }}\\{{ item }}"
+        dest: "{{ dest_base }}\\{{ item }}"
+        recurse: yes
+        purge: no
+        flags: "/E /Z /R:3 /W:5"
+      loop: "{{ cpm_components }}"
+
+    - name: "Remove Read-Only attributes from D:\\CyberArk"
+      ansible.windows.win_shell: |
+        attrib.exe -r "D:\CyberArk\*" /s /d
+        exit 0

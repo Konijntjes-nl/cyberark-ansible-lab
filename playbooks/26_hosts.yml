@@ -1,0 +1,17 @@
+---
+- name: "Configure Hosts File on Vault Servers"
+  hosts: vault
+  gather_facts: no
+  tasks:
+    - name: "Append static DNS mappings to hosts file"
+      community.windows.win_lineinfile:
+        path: 'C:\Windows\System32\drivers\etc\hosts'
+        line: "{{ item.ip }} {{ item.name }}"
+        regex: '.*?\s+{{ item.name | regex_escape }}$'
+        state: present
+      loop:
+        - { ip: '10.0.3.1', name: 'dc-01.lab.cybermark.tech' }
+        - { ip: '10.0.3.2', name: 'dc-02.lab.cybermark.tech' }
+        - { ip: '10.0.3.3', name: 'vault-01.lab.cybermark.tech' }
+        - { ip: '10.0.3.4', name: 'vault-02.lab.cybermark.tech' }
+        - { ip: '10.0.3.1', name: 'pki.lab.cybermark.tech' }

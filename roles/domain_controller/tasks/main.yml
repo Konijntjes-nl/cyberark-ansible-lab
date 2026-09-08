@@ -10,6 +10,14 @@
       - RSAT-AD-PowerShell
     include_management_tools: yes
     state: present
+  register: ad_feature_install
+
+# Always clear pending CBS state on dc-01 before forest creation
+- name: "Reboot Primary DC before promotion"
+  ansible.windows.win_reboot:
+    msg: "Clearing pending reboot before AD forest promotion on dc-01"
+    reboot_timeout: 600
+  when: inventory_hostname == 'dc-01'
 
 - name: "Promote Primary DC"
   microsoft.ad.domain:
@@ -51,7 +59,6 @@
     }
   when: inventory_hostname == 'dc-01'
 
-# --- THIS IS THE CRITICAL MISSING LOOP ---
 - name: "Import Reservations from Inventory"
   ansible.windows.win_shell: |
     $ErrorActionPreference = "Stop"
@@ -77,12 +84,11 @@
     if (-not (Get-DnsServerResourceRecord -ZoneName $ReverseZone -Name $Octet -RRType Ptr -ErrorAction SilentlyContinue)) {
         Add-DnsServerResourceRecordPtr -Name $Octet -ZoneName $ReverseZone -PtrDomainName "$Name.$Zone"
     }
-  # Combines both groups to get all IPs
   loop: "{{ groups['windows'] + groups['linux'] }}"
   when: 
     - inventory_hostname == 'dc-01'
     - hostvars[item]['ip'] is defined
-    
+
 - name: "Create CNAME Record for PKI HTTP CDP"
   ansible.windows.win_shell: |
     $Zone = "{{ domain_name }}"
@@ -93,14 +99,93 @@
         Add-DnsServerResourceRecordCName -Name $Alias -HostNameAlias $Target -ZoneName $Zone
     }
   when: inventory_hostname == 'dc-01'
+
+- name: "Ensure DNS Forward A Records exist for VIPs"
+  ansible.windows.win_shell: |
+    $Zone = "{{ domain_name }}"
+    $Name = "{{ item.name }}"
+    $IP   = "{{ item.ip }}"
+
+    if (Get-DnsServerResourceRecord -ZoneName $Zone -Name $Name -RRType CName -ErrorAction SilentlyContinue) {
+        Remove-DnsServerResourceRecord -ZoneName $Zone -Name $Name -RRType CName -Force
+    }
+
+    $Existing = Get-DnsServerResourceRecord -ZoneName $Zone -Name $Name -RRType A -ErrorAction SilentlyContinue
+    if (-not $Existing) {
+        Add-DnsServerResourceRecordA -Name $Name -ZoneName $Zone -IPv4Address $IP
+        Write-Output "Created A record for $Name -> $IP"
+    } elseif ($Existing.RecordData.IPv4Address.IPAddressToString -ne $IP) {
+        $NewRecord = $Existing.Clone()
+        $NewRecord.RecordData.IPv4Address = [System.Net.IPAddress]::Parse($IP)
+        Set-DnsServerResourceRecord -ZoneName $Zone -OldInputObject $Existing -NewInputObject $NewRecord
+        Write-Output "Updated A record for $Name -> $IP"
+    } else {
+        Write-Output "A record for $Name already points to $IP"
+    }
+  loop:
+    - { name: "pvwa", ip: "10.0.3.110" }
+    - { name: "psm", ip: "10.0.3.120" }
+    - { name: "htmlgw", ip: "10.0.3.130" }
+    - { name: "ccp", ip: "10.0.3.140" }
+    - { name: "conjur", ip: "10.0.3.150" }
+  register: dns_vip_a_result
+  changed_when: "'Created' in dns_vip_a_result.stdout or 'Updated' in dns_vip_a_result.stdout"
+  when: inventory_hostname == 'dc-01'
+
+- name: "Ensure DNS Reverse PTR Records exist for VIPs"
+  ansible.windows.win_shell: |
+    $RevZone = "3.0.10.in-addr.arpa"
+    $IP      = "{{ item.ip }}"
+    $Octet   = $IP.Split('.')[-1]
+    $Target  = "{{ item.name }}.{{ domain_name }}"
+
+    $ExistingPtr = Get-DnsServerResourceRecord -ZoneName $RevZone -Name $Octet -RRType Ptr -ErrorAction SilentlyContinue
+    if (-not $ExistingPtr) {
+        Add-DnsServerResourceRecordPtr -Name $Octet -ZoneName $RevZone -PtrDomainName $Target
+        Write-Output "Created PTR record for $Octet -> $Target"
+    } elseif ($ExistingPtr.RecordData.PtrDomainName.TrimEnd('.') -ne $Target) {
+        $NewPtr = $ExistingPtr.Clone()
+        $NewPtr.RecordData.PtrDomainName = "$Target."
+        Set-DnsServerResourceRecord -ZoneName $RevZone -OldInputObject $ExistingPtr -NewInputObject $NewPtr
+        Write-Output "Updated PTR record for $Octet -> $Target"
+    } else {
+        Write-Output "PTR record for $Octet already points to $Target"
+    }
+  loop:
+    - { name: "pvwa", ip: "10.0.3.110" }
+    - { name: "psm", ip: "10.0.3.120" }
+    - { name: "htmlgw", ip: "10.0.3.130" }
+    - { name: "ccp", ip: "10.0.3.140" }
+    - { name: "conjur", ip: "10.0.3.150" }
+  register: dns_vip_ptr_result
+  changed_when: "'Created' in dns_vip_ptr_result.stdout or 'Updated' in dns_vip_ptr_result.stdout"
+  when: inventory_hostname == 'dc-01'
+
 # ==========================================
 # SECONDARY DC (DC-02) CONFIGURATION
 # ==========================================
+# Always clear pending CBS state on dc-02 before promotion
+- name: "Reboot Secondary DC before promotion"
+  ansible.windows.win_reboot:
+    msg: "Clearing pending reboot before DC promotion on dc-02"
+    reboot_timeout: 600
+  when: inventory_hostname == 'dc-02'
+
 - name: "Point DNS to Primary DC"
   ansible.windows.win_dns_client:
     adapter_names: '*'
     dns_servers:
       - "10.0.3.1"
+  when: inventory_hostname == 'dc-02'
+
+- name: "Wait for Domain DNS Resolution on Secondary DC"
+  ansible.windows.win_shell: |
+    $ErrorActionPreference = "Stop"
+    Resolve-DnsName -Name "{{ domain_name }}" -Server 10.0.3.1
+  register: dns_check
+  retries: 15
+  delay: 10
+  until: dns_check is success
   when: inventory_hostname == 'dc-02'
 
 - name: "Promote Secondary DC"

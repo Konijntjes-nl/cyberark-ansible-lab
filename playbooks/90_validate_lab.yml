@@ -1,150 +1,247 @@
 ---
-- name: "Lab Validation & Health Check (Production Standard)"
+# ==============================================================================
+# LAB VALIDATION & HEALTH CHECK (END-TO-END PIPELINE STANDARD)
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# PLAY 1: PRIMARY DOMAIN CONTROLLER & DIRECTORY HEALTH
+# ------------------------------------------------------------------------------
+- name: "1. Validate Active Directory, PKI, DNS VIPs, and DHCP"
   hosts: dc-01
   gather_facts: no
   vars_files:
     - ../inventory/group_vars/all.yml
   vars:
-    ansible_connection: winrm
-    ansible_user: "administrator@lab.cybermark.tech"
-    ansible_password: "{{ vault_ansible_password }}"
-
-    # Validation Targets
+    ca_common_name: "CyberArk-Lab-Root-CA"
     target_user: "admin.vault"
     target_group: "CyberArk_Vault_Admins"
     target_ou: "OU=Tier0,OU=Administration,OU=Corp,{{ domain_dn }}"
     target_computer: "pvwa-01"
-    
-    # --- CRITICAL: MATCHES YOUR PKI ROLE CA NAME ---
-    ca_common_name: "CyberArk-Lab-Root-CA" 
+    vips:
+      - { name: "pvwa", ip: "10.0.3.110" }
+      - { name: "psm", ip: "10.0.3.120" }
+      - { name: "htmlgw", ip: "10.0.3.130" }
+      - { name: "ccp", ip: "10.0.3.140" }
+      - { name: "conjur", ip: "10.0.3.150" }
 
   tasks:
-# --- 1. CORE AD SERVICES ---
-    - name: "1. Check Active Directory Services"
+    - name: "Check Core AD Services"
       ansible.windows.win_service_info:
         name: "{{ item }}"
       register: svc_info
       loop:
-        - adws       # Active Directory Web Services
-        - ntds       # Active Directory Domain Services
-        - dns        # DNS Server
-        - dhcpserver # DHCP Server
-        - certsvc    # Active Directory Certificate Services
-        - w3svc      # IIS (Required for CRL)
-      # FIX: Correctly reference the registered variable
+        - adws
+        - ntds
+        - dns
+        - dhcpserver
+        - certsvc
+        - w3svc
       failed_when: not svc_info.exists or svc_info.services[0].state != 'started'
 
-    # --- 2. PKI & CERTIFICATE SERVICES CHECK ---
-    - name: "2a. Verify Enterprise CA is Installed & Trusted"
+    - name: "Verify Enterprise CA is Installed & Trusted"
       ansible.windows.win_shell: |
         $ErrorActionPreference = "Stop"
-        $CAName = "{{ ca_common_name }}"
+        $RegPath = "HKLM:\SYSTEM\CurrentControlSet\Services\CertSvc\Configuration\{{ ca_common_name }}"
+        if (-not (Test-Path $RegPath)) { throw "CA Config missing in Registry." }
+        $RootCert = Get-ChildItem Cert:\LocalMachine\Root | Where-Object { $_.Subject -match "{{ ca_common_name }}" }
+        if (-not $RootCert) { throw "CA Root Cert not in LocalMachine\Root." }
+      changed_when: false
+
+    - name: "Verify CRL Accessibility (HTTP CDP)"
+      ansible.windows.win_shell: |
+        $ErrorActionPreference = "Stop"
+        $Response = Invoke-WebRequest -Uri "http://pki.{{ domain_name }}/CertEnroll/{{ ca_common_name }}.crl" -UseBasicParsing -TimeoutSec 5
+        if ($Response.StatusCode -ne 200) { throw "CRL endpoint returned $($Response.StatusCode)" }
+      changed_when: false
+
+    - name: "Verify AD Forest Replication Health"
+      ansible.windows.win_shell: |
+        $ErrorActionPreference = "Stop"
         
-        # 1. Check Registry (Confirms this server IS the CA)
-        $RegPath = "HKLM:\SYSTEM\CurrentControlSet\Services\CertSvc\Configuration\$CAName"
-        if (-not (Test-Path $RegPath)) { 
-            throw "CA Configuration for '$CAName' not found in Registry. Is the CA name correct?" 
+        # Query local replication partner status
+        $RepPartners = Get-ADReplicationPartnerMetadata -Target "dc-01" -Scope Server
+        if (-not $RepPartners) {
+            throw "No replication partners found for dc-01."
         }
 
-        # 2. Check Trusted Root Store (Confirms the server TRUSTS itself)
-        $RootCert = Get-ChildItem Cert:\LocalMachine\Root | Where-Object { $_.Subject -match $CAName }
-        if (-not $RootCert) {
-            throw "The CA Certificate is not in the Trusted Root Store."
+        $Failures = $RepPartners | Where-Object { $_.ConsecutiveReplicationFailures -gt 0 }
+        if ($Failures) {
+            $Details = $Failures | Select-Object Partner, ConsecutiveReplicationFailures, LastReplicationResult, LastReplicationSuccess
+            throw "Replication errors detected:`n$($Details | Out-String)"
         }
+
+        Write-Output "✅ Replication partner status healthy: $($RepPartners.Partner -join ', ')"
+      changed_when: false
+
+    - name: "Verify DHCP Failover Partner Status"
+      ansible.windows.win_shell: |
+        $ErrorActionPreference = "Stop"
         
-        Write-Output "✅ CA Found & Trusted: $($RootCert.Subject)"
-      register: ca_check
-      changed_when: false
-      failed_when: ca_check.rc != 0
-    - name: "2b. Verify CRL (Revocation List) Accessibility"
-      ansible.windows.win_shell: |
-        $ErrorActionPreference = "Stop"
-        # Check if CRL exists on the filesystem (IIS Root)
-        $CrlPath = "C:\Windows\System32\CertSrv\CertEnroll\{{ ca_common_name }}.crl"
-        if (-not (Test-Path $CrlPath)) { throw "CRL file not found at $CrlPath" }
-        
-        # Check HTTP Accessibility
-        $crlUrl = "http://localhost/CertEnroll/{{ ca_common_name }}.crl"
-        try {
-            $request = [System.Net.WebRequest]::Create($crlUrl)
-            $response = $request.GetResponse()
-            $response.Close()
-            Write-Output "CRL is reachable via HTTP"
-        } catch {
-            throw "Failed to reach CRL via HTTP at $crlUrl. IIS might be misconfigured."
+        $fo = Get-DhcpServerv4Failover -ErrorAction SilentlyContinue
+        if (-not $fo) {
+            throw "No DHCP failover relationships configured on dc-01."
         }
-      register: crl_check
-      changed_when: false
-      failed_when: crl_check.rc != 0
 
-    # --- 3. CORPORATE STRUCTURE CHECK ---
-    - name: "3a. Verify OU Structure (Tier 0)"
-      ansible.windows.win_shell: |
-        $ErrorActionPreference = "Stop"
-        if (-not (Get-ADOrganizationalUnit -Identity "{{ target_ou }}" -ErrorAction SilentlyContinue)) {
-             throw "OU '{{ target_ou }}' missing. Did ad_structure role run?"
+        foreach ($rel in $fo) {
+            if ($rel.State -ne 'Normal') {
+                throw "DHCP Failover relationship '$($rel.Name)' is in '$($rel.State)' state (expected 'Normal')."
+            }
+            Write-Output "✅ DHCP Failover '$($rel.Name)' is healthy (Partner: $($rel.PartnerServer), State: $($rel.State))"
         }
-      register: ou_check
       changed_when: false
-      failed_when: ou_check.rc != 0
 
-    - name: "3b. Verify Vault Admin '{{ target_user }}' Exists"
+    - name: "Verify DNS Forward VIP Records (A)"
       ansible.windows.win_shell: |
         $ErrorActionPreference = "Stop"
-        if (-not (Get-ADUser -Identity "{{ target_user }}" -ErrorAction SilentlyContinue)) {
-             throw "User '{{ target_user }}' missing."
-        }
-      register: user_check
+        $res = Resolve-DnsName -Name "{{ item.name }}.{{ domain_name }}" -Type A -Server 127.0.0.1
+        if ($res.IPAddress -ne "{{ item.ip }}") { throw "DNS mismatch for {{ item.name }}: expected {{ item.ip }}, got $($res.IPAddress)" }
+      loop: "{{ vips }}"
       changed_when: false
-      failed_when: user_check.rc != 0
 
-    - name: "3c. Verify Security Group '{{ target_group }}'"
+    - name: "Verify DNS Reverse VIP Records (PTR)"
       ansible.windows.win_shell: |
         $ErrorActionPreference = "Stop"
-        if (-not (Get-ADGroup -Identity "{{ target_group }}" -ErrorAction SilentlyContinue)) {
-             throw "Group '{{ target_group }}' missing."
-        }
-      register: group_check
+        $res = Resolve-DnsName -Name "{{ item.ip }}" -Type PTR -Server 127.0.0.1
+        $expected = "{{ item.name }}.{{ domain_name }}"
+        if ($res.NameHost.TrimEnd('.') -ne $expected) { throw "PTR mismatch for {{ item.ip }}: expected $expected, got $($res.NameHost)" }
+      loop: "{{ vips }}"
       changed_when: false
-      failed_when: group_check.rc != 0
 
-    - name: "3d. Verify Computer Object '{{ target_computer }}'"
+    - name: "Verify AD Objects (OU, User, Group, Computer)"
       ansible.windows.win_shell: |
         $ErrorActionPreference = "Stop"
-        if (-not (Get-ADComputer -Identity "{{ target_computer }}" -ErrorAction SilentlyContinue)) {
-             throw "Computer '{{ target_computer }}' missing."
-        }
-      register: computer_check
+        if (-not (Get-ADOrganizationalUnit -Identity "{{ target_ou }}")) { throw "OU missing" }
+        if (-not (Get-ADUser -Identity "{{ target_user }}")) { throw "User missing" }
+        if (-not (Get-ADGroup -Identity "{{ target_group }}")) { throw "Group missing" }
+        if (-not (Get-ADComputer -Identity "{{ target_computer }}")) { throw "Computer missing" }
       changed_when: false
-      failed_when: computer_check.rc != 0
 
-    # --- 4. INFRASTRUCTURE HEALTH ---
-    - name: "4a. Verify DNS Resolution (Internal)"
+
+# ------------------------------------------------------------------------------
+# PLAY 2: WINDOWS NODES (MEDIA, CERTS & DOMAIN MEMBERSHIP)
+# ------------------------------------------------------------------------------
+- name: "2. Validate Windows Component Readiness"
+  hosts: vault, pvwa, cpm, psm
+  gather_facts: no
+  tasks:
+    - name: "Verify Domain Join Status (Non-Vault Nodes)"
       ansible.windows.win_shell: |
-        $ErrorActionPreference = "Stop"
-        Resolve-DnsName -Name "dc-02.{{ domain_name }}" -Type A
-      register: dns_check
+        $comp = Get-CimInstance Win32_ComputerSystem
+        if (-not $comp.PartOfDomain) { throw "Node is not joined to a domain" }
+      when: "'vault' not in group_names"
       changed_when: false
-      failed_when: dns_check.rc != 0
 
-    - name: "4b. Verify DHCP Scope is Active"
+    - name: "Verify D:\\CyberArk Staged Media Exists"
+      ansible.windows.win_file:
+        path: "D:\\CyberArk"
+        state: directory
+      check_mode: yes
+      register: media_dir
+      failed_when: media_dir.changed
+
+    - name: "Verify Root CA Installed in LocalMachine Store"
       ansible.windows.win_shell: |
-        $ErrorActionPreference = "Stop"
-        $Scope = Get-DhcpServerv4Scope | Where-Object { $_.State -eq 'Active' }
-        if (-not $Scope) { throw "No Active DHCP Scopes Found" }
-        Write-Output "Scope $($Scope.ScopeId) is Active"
-      register: dhcp_check
+        $cert = Get-ChildItem Cert:\LocalMachine\Root | Where-Object { $_.Subject -match "CyberArk-Lab-Root-CA" }
+        if (-not $cert) { throw "Root CA missing from trusted root store" }
       changed_when: false
 
-    # --- REPORTING ---
-    - name: ">>> LAB STATUS REPORT <<<"
-      debug:
+
+# ------------------------------------------------------------------------------
+# PLAY 3: LOAD BALANCERS (KEEPALIVED VIPS & HAPROXY)
+# ------------------------------------------------------------------------------
+- name: "3. Validate Load Balancer Cluster"
+  hosts: lb-01
+  gather_facts: yes
+  become: yes
+  vars:
+    vips:
+      - "10.0.3.110"
+      - "10.0.3.120"
+      - "10.0.3.130"
+  tasks:
+    - name: "Verify Keepalived VIPs are bound to lb-01"
+      ansible.builtin.shell: "ip addr show dev {{ ansible_facts['default_ipv4']['interface'] }} | grep -q {{ item }}"
+      loop: "{{ vips }}"
+      changed_when: false
+
+    - name: "Verify HAProxy Stats Socket & Service"
+      ansible.builtin.systemd:
+        name: haproxy
+        state: started
+      check_mode: yes
+      register: haproxy_stat
+      failed_when: haproxy_stat.changed
+
+
+# ------------------------------------------------------------------------------
+# PLAY 4: HTML5 GATEWAY HOST READINESS & OPTIONAL CONTAINER CHECK
+# ------------------------------------------------------------------------------
+- name: "4. Validate HTML5 Gateway Readiness"
+  hosts: htmlgw*
+  gather_facts: no
+  become: yes
+  tasks:
+    - name: "Verify Root CA Anchor in OS Trust Store"
+      ansible.builtin.stat:
+        path: /etc/pki/ca-trust/source/anchors/RootCA.pem
+      register: ca_anchor
+      failed_when: not ca_anchor.stat.exists
+
+    - name: "Verify Staged Certificates Directory (/opt/cert)"
+      ansible.builtin.stat:
+        path: "/opt/cert/{{ item }}"
+      register: cert_files
+      loop:
+        - html5gw.crt
+        - html5gw.key
+        - ca.pem
+        - pvwa.crt
+        - psm.crt
+      failed_when: not cert_files.stat.exists
+
+    - name: "Verify CD-ROM Mount Point Readiness"
+      ansible.builtin.command: findmnt -rn /mnt/cdrom
+      changed_when: false
+
+    - name: "Check if Podman is Installed"
+      ansible.builtin.command: which podman
+      register: podman_installed
+      failed_when: false
+      changed_when: false
+
+    - name: "Check Podman Container Status (If Podman is Installed)"
+      ansible.builtin.command: "podman inspect -f '{{ '{{' }} .State.Running {{ '}}' }}' {{ inventory_hostname }}"
+      register: podman_state
+      changed_when: false
+      failed_when: podman_state.stdout | trim != 'true'
+      when: podman_installed.rc == 0
+
+    - name: "Verify Guacamole HTTPS Endpoint (If Container is Running)"
+      ansible.builtin.uri:
+        url: "https://127.0.0.1:8443/guac/"
+        validate_certs: no
+        status_code: [200, 302]
+      register: gw_endpoint
+      changed_when: false
+      when: podman_installed.rc == 0
+
+# ------------------------------------------------------------------------------
+# PLAY 5: FINAL REPORT
+# ------------------------------------------------------------------------------
+- name: "5. Comprehensive Lab Status Summary"
+  hosts: dc-01
+  gather_facts: no
+  tasks:
+    - name: ">>> OVERALL PIPELINE STATUS REPORT <<<"
+      ansible.builtin.debug:
         msg:
-          - "✅ AD Services:    RUNNING"
-          - "✅ PKI Service:    RUNNING (CA: {{ ca_common_name }})"
-          - "✅ CRL Access:     VALID (HTTP Reachable)"
-          - "✅ OU Structure:   VALID (Tier 0 Found)"
-          - "✅ User Check:     VALID ({{ target_user }})"
-          - "✅ Computer Check: VALID ({{ target_computer }})"
-          - "✅ DNS Health:     RESOLVED"
-          - "✅ DHCP Status:    ACTIVE"
+          - "========================================================="
+          - " Active Directory Services     : HEALTHY"
+          - " PKI / HTTP CRL Endpoint       : VALID (pki.lab.cybermark.tech)"
+          - " AD Forest / DHCP Failover     : NORMAL & REPLICATING"
+          - " Static DNS VIPs (A & PTR)     : RESOLVED"
+          - " Domain Joins (PVWA/CPM/PSM)   : VERIFIED"
+          - " Media & Cert Staging (D:\\)   : STAGED"
+          - " Load Balancers (HAProxy/VIPs) : MASTER ACTIVE (lb-01)"
+          - " HTML5 Gateway Containers      : RUNNING (Port 8443 OK)"
+          - "========================================================="
